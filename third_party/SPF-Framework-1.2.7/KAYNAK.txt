@@ -1,0 +1,4 @@
+SPF-Framework v1.2.7 (Track'n'Truck Devs), Apache License 2.0
+Kaynak: https://github.com/TrackAndTruckDevs/SPF-Framework/releases/tag/v1.2.7
+spf-framework.dll SHA256: A38F1151E5D14B91D153EA2563FFB7C1F9C6E3FA8BD7D15FE96CDD247C001886
+Bu klasordeki DLL ve dil dosyalari paketle.ps1 tarafindan resmi surumden indirilir.

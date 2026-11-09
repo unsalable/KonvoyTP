@@ -1,0 +1,12 @@
+{
+    "MainWindow": {
+        "title": "Konvoy Işınlanma",
+        "desc": "Arkadaşına ışınlan, yanına çek, kamyonu kurtar."
+    },
+    "keybinds": {
+        "toggle": {
+            "title": "Konvoy Işınlanma menüsü",
+            "desc": "Menüyü açar / kapatır."
+        }
+    }
+}

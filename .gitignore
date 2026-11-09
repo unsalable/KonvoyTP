@@ -1,0 +1,14 @@
+# build / package outputs
+build/
+dist/
+tests/out/
+compile_commands.json
+
+# SPF-Framework binaries are downloaded by paketle.ps1 (official release, Apache-2.0)
+third_party/SPF-Framework-1.2.7/spf-framework.dll
+third_party/SPF-Framework-1.2.7/spfAssets/
+
+# editor junk
+.vs/
+.vscode/
+*.user
