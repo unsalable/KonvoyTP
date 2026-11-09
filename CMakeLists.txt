@@ -3,7 +3,7 @@
 # ======================================================================
 cmake_minimum_required(VERSION 3.20)
 
-project(KonvoyTP VERSION 1.1.0 LANGUAGES CXX)
+project(KonvoyTP VERSION 1.2.0 LANGUAGES CXX)
 if(NOT PROJECT_VERSION_TWEAK)
   set(PROJECT_VERSION_TWEAK 0)
 endif()

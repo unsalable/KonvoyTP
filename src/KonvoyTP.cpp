@@ -106,6 +106,7 @@ struct TpJob {
   double verifyAt = 0;
   int fixAttempts = 0;
   Spot before;
+  bool endsCrash = false;  // a recovery back onto the recorded road: forget the last crash afterwards
 };
 
 struct GotoReq {
@@ -163,6 +164,14 @@ struct Ctx {
   double odo = 0;
   int seg = 0;
   bool jumpPending = false;
+  // crash memory: "Yola çek" / "Kendi şeridine geç" prefer road points from before the last crash
+  double crashT = -1e9;     // time of the last detected crash (skid/spin, roll-over, flying)
+  double crashOdo = 0;      // odometer at that moment
+  double calmUntil = -1;    // our own teleport just happened: ignore crash signals until then
+  bool wheelInfo = false;   // the game reports wheel/ground contact (seen "on ground" at least once)
+  int airReads = 0;         // consecutive reads with no wheel on the ground
+  uint64_t offroadSubst = 0;  // bit i: substance i is off-road (grass, dirt, sand, mud, snow)
+  double substCheckedAt = -100;
 
   // network
   std::map<std::string, Peer> peers;
@@ -184,6 +193,17 @@ struct Ctx {
 
   std::string lastError;
   bool wasVisible = false;
+  double toggleAt = -1.0;     // menu key pressed while Shift was down (maybe the Shift+F8 chord)
+  double roadKeyAt = -100.0;  // last "Yola çek" hotkey
+
+  // our own toast notifications (drawn by a separate, non-interactive overlay window)
+  struct Toast {
+    std::string text;
+    int kind;  // 0 info, 1 success, 2 warning, 3 error
+    double t0, life;
+  };
+  std::deque<Toast> toasts;
+  SPF_Window_Handle* toastWin = nullptr;
 };
 
 static Ctx g;
@@ -220,17 +240,17 @@ static void Logf(SPF_LogLevel lvl, const char* fmt, ...) {
   if (api && g.log) api->Log(g.log, lvl, buf);
 }
 
+static double Now();
+
+// Shows one of our own pill-shaped notifications at the top of the screen (see RenderToasts).
 static void Notify(SPF_NotificationType type, const std::string& msg) {
   Logf(SPF_LOG_INFO, "[bildirim] %s", msg.c_str());
-  if (g.ui && g.ui->UI_ShowNotification) {
-    SPF_Notification_Params p;
-    memset(&p, 0, sizeof(p));
-    p.type = type;
-    p.message = msg.c_str();
-    p.mode = SPF_NOTIF_MODE_STACK;
-    p.duration = 4.0f;
-    g.ui->UI_ShowNotification(&p);
-  }
+  int kind = 0;
+  if (type == SPF_NOTIFICATION_SUCCESS) kind = 1;
+  else if (type == SPF_NOTIFICATION_WARNING) kind = 2;
+  else if (type == SPF_NOTIFICATION_ERROR || type == SPF_NOTIFICATION_CRITICAL) kind = 3;
+  g.toasts.push_back({msg, kind, Now(), kind == 3 ? 4.5 : (kind == 2 ? 3.5 : 2.6)});
+  while (g.toasts.size() > 3) g.toasts.pop_front();
 }
 
 static std::string WideToUtf8(const wchar_t* w) {
@@ -485,6 +505,40 @@ static std::string PeerName(const std::string& iid) {
 // =====================================================================================
 // Telemetry + trail ("breadcrumbs" of good on-road positions)
 // =====================================================================================
+// Which surface types (the game's "substances") are off-road. Re-read now and then; the list is tiny.
+static void UpdateSurfaceTypes(const SPF_Telemetry_API* t, double now) {
+  if (!t->Tel_GetCommonData || now - g.substCheckedAt < 10.0) return;
+  g.substCheckedAt = now;
+  static SPF_CommonData cd;  // ~4 KB, kept off the stack
+  memset(&cd, 0, sizeof(cd));
+  t->Tel_GetCommonData(g.tel, &cd, sizeof(cd));
+  uint64_t mask = 0;
+  uint32_t n = std::min<uint32_t>(cd.substance_count, 64);
+  for (uint32_t i = 0; i < n; ++i) {
+    char name[SPF_TELEMETRY_ID_MAX_SIZE];
+    memcpy(name, cd.substances[i], sizeof(name));
+    name[sizeof(name) - 1] = 0;
+    for (char* c = name; *c; ++c) *c = (char)std::tolower((unsigned char)*c);
+    if (strstr(name, "road")) continue;  // road, road_snow, ...
+    if (strstr(name, "grass") || strstr(name, "dirt") || strstr(name, "sand") || strstr(name, "mud") || strstr(name, "snow"))
+      mask |= 1ull << i;
+  }
+  g.offroadSubst = mask;
+}
+
+// A crash (skid/spin, roll-over, flying) just happened: the last moments before it are not safe road
+// positions either (whatever we hit is still there), so they are dropped from the trail.
+static void MarkCrash(double now, const char* why) {
+  if (now - g.crashT > 3.0) Logf(SPF_LOG_INFO, "kaza algılandı (%s)", why);
+  g.crashT = now;
+  g.crashOdo = g.odo;
+  for (auto it = g.trail.rbegin(); it != g.trail.rend(); ++it) {
+    if (it->seg != g.seg) break;
+    if (now - it->t > 1.2 && g.odo - it->odo > 8.0) break;
+    it->good = false;
+  }
+}
+
 static void ReadTelemetry(bool force) {
   double now = Now();
   if (!force && now - g.lastTel < 0.1) return;
@@ -513,26 +567,84 @@ static void ReadTelemetry(bool force) {
   g.meRoll = wp.orientation.roll;
   if (!s.valid) return;
 
-  // teleport / jump detection (> ~120 m/s apparent speed)
+  // teleport / jump detection (> ~120 m/s apparent speed), and the direction the truck actually moved since
+  // the previous read (~0.1 s ago) compared with where it points: the skid angle, in turns (0.25 = 90 deg)
+  double readDiff = 0.0;
   if (g.prevTelT >= 0 && g.prevTel.valid) {
     double dt = std::max(0.05, now - g.prevTelT);
     double d = Dist(s, g.prevTel);
-    if (d > 60.0 && d / dt > 120.0) g.jumpPending = true;
+    if (d > 60.0 && d / dt > 120.0) {
+      g.jumpPending = true;
+    } else if (now - g.prevTelT < 0.5 && Dist2D(s, g.prevTel) > 0.5) {
+      double mh = Wrap01(std::atan2(-(s.x - g.prevTel.x), -(s.z - g.prevTel.z)) / (2.0 * kPi));
+      readDiff = std::fabs(HeadDiff(mh - s.h));
+    }
   }
   g.prevTel = s;
   g.prevTelT = now;
 
   if (g.paused) return;
+  UpdateSurfaceTypes(t, now);
+
+  // ---- what the truck is doing right now ----
+  // Every extra signal below is only used when the game actually provides it, so missing or odd data
+  // can never stop the trail from being recorded.
+  int onGround = 0, onDirt = 0;
+  for (int i = 0; i < SPF_TELEMETRY_WHEEL_MAX_COUNT; ++i) {
+    const SPF_WheelData& w = td.wheels[i];
+    if (!w.on_ground) continue;
+    ++onGround;
+    if (w.substance < 64 && ((g.offroadSubst >> w.substance) & 1)) ++onDirt;
+  }
+  if (onGround > 0) g.wheelInfo = true;
+  bool air = g.wheelInfo && onGround == 0;
+  g.airReads = air ? g.airReads + 1 : 0;
+  bool flying = g.airReads >= 3;  // a real flight, not a bump
+  bool offRoad = onGround > 0 && onDirt * 2 > onGround;  // most wheels on grass / dirt / sand
+  // skid angle from the truck's own velocity (vehicle space: -Z forward, +X right), in turns (0.25 = 90 deg);
+  // trusted only when it agrees with the speedometer
+  double spd = std::fabs(g.meSpeed);
+  double fwd = -td.local_linear_velocity.z, lat = td.local_linear_velocity.x;
+  double vh = std::sqrt(fwd * fwd + lat * lat);
+  double slip = -1.0;
+  if (vh > 1.5 && vh > spd * 0.5 && vh < spd * 2.0 + 1.0) slip = std::atan2(std::fabs(lat), fwd) / (2.0 * kPi);
+  double tilt = std::max(std::fabs(g.mePitch), std::fabs(g.meRoll));
+  bool forward = g.meSpeed > 3.0;  // reversing is not skidding
+  // skidding right now (either signal); > ~40 deg while driving forward = a crash, not a manoeuvre
+  double skid = std::max(readDiff, slip);
+  const char* crash = nullptr;
+  if (flying) crash = "havada";
+  else if (tilt > 0.05) crash = "devrilme";
+  else if (forward && skid > 0.11) crash = "savrulma";
+
+  // ---- a trail sample every 3 m ----
+  bool sample = false;
+  double moveDiff = 0.0;
   if (g.jumpPending) {
     g.seg++;
     g.jumpPending = false;
-  } else if (!g.trail.empty()) {
+    sample = true;
+  } else if (g.trail.empty()) {
+    sample = true;
+  } else {
     const TrailPt& last = g.trail.back();
     double d = Dist(s, last.x, last.y, last.z);
-    if (d < 3.0) return;
-    if (last.seg == g.seg) g.odo += d;
+    if (d >= 3.0) {
+      sample = true;
+      if (last.seg == g.seg) {
+        g.odo += d;
+        // direction of travel vs. where the truck points. Normal curves and lane changes stay well below
+        // 10 deg between samples 3 m apart; more than ~16 deg = skidding, more than ~40 deg = spinning.
+        double moveH = Wrap01(std::atan2(-(s.x - last.x), -(s.z - last.z)) / (2.0 * kPi));
+        moveDiff = std::fabs(HeadDiff(moveH - s.h));
+        if (!crash && forward && moveDiff > 0.11) crash = "savrulma";
+      }
+    }
   }
-  bool good = g.meSpeed > 1.0 && std::fabs(g.mePitch) < 0.035 && std::fabs(g.meRoll) < 0.035;
+  if (crash && now >= g.calmUntil) MarkCrash(now, crash);
+  if (!sample) return;
+  bool good = g.meSpeed > 1.0 && tilt < 0.035 && moveDiff <= 0.045 && skid <= 0.045 && !air && !offRoad &&
+              now - g.crashT > 0.5;
   g.trail.push_back({now, s.x, s.y, s.z, s.h, g.odo, g.seg, good});
   while (g.trail.size() > 4000) g.trail.pop_front();
 }
@@ -756,6 +868,7 @@ static void FinishJob(bool ok, const std::string& err) {
   if (!j.replyIid.empty()) Send(Fmt("R %s %s %s", g.iid.c_str(), j.replyIid.c_str(), ok ? "OK" : "ERR"));
   if (ok) {
     if (j.before.valid && Dist(j.before, j.dest) > 5.0) g.undoSpot = j.before;
+    if (j.endsCrash) g.crashT = -1e9;
     Notify(SPF_NOTIFICATION_SUCCESS, j.label);
     if (InConvoy()) g.pendingPAt = Now() + 1.0;  // tell friends our new position
   } else {
@@ -794,6 +907,7 @@ static void VerifyJob() {
         j.fixAttempts = 1;
         char err[256];
         ExecTeleport(j.dest, err, (int)sizeof(err));
+        g.calmUntil = Now() + 2.5;
         j.verifyAt = Now() + 0.6;
         return;
       }
@@ -837,6 +951,9 @@ static void ProcessJob() {
     FinishJob(false, std::string("oyun reddetti (") + err + ")");
     return;
   }
+  // the truck drops onto the spot: not a crash. A real move also starts a new trail segment.
+  g.calmUntil = now + 2.5;
+  if (!g.me.valid || Dist(g.me, j.dest) > 5.0) g.jumpPending = true;
   j.verifying = true;
   j.verifyAt = now + 0.6;
 }
@@ -902,11 +1019,96 @@ static void ActionUpright() {
   StartJob(d, "Kamyon düzeltildi.", "", true);
 }
 
-static void ActionTurn() {
-  Spot d = g.me;
-  d.y += 0.3;
-  d.h = Wrap01(d.h + 0.5);
-  StartJob(d, "U dönüşü yapıldı.", "", true);
+// ---- "Yola çek" / "Kendi şeridine geç" -------------------------------------------------
+// Both use the trail of good road positions recorded while the player was driving normally
+// (upright, moving forward, not skidding). Those points are always on the road, in the lane the
+// player was driving in, with the correct direction - unlike the game's own F7 recovery, which
+// gives up when the truck is no longer on a road item.
+// Nearest good road point within maxDist. Shortly after a crash, points recorded before it come first: wherever
+// the truck slid, flew or was driven to afterwards (wrong lane, a field), it goes back to where it drove properly.
+static int NearestTrailIdx(double maxDist) {
+  bool afterCrash = Now() - g.crashT < 120.0 && g.odo - g.crashOdo < 150.0;
+  for (int pass = afterCrash ? 0 : 1; pass < 2; ++pass) {
+    int best = -1;
+    double bestD = maxDist;
+    for (int i = (int)g.trail.size() - 1; i >= 0; --i) {
+      const TrailPt& p = g.trail[(size_t)i];
+      if (!p.good || (pass == 0 && p.t >= g.crashT)) continue;
+      double d = Dist(g.me, p.x, p.y, p.z);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0) return best;
+  }
+  return -1;
+}
+
+static Spot TrailSpot(const TrailPt& p, double lift) {
+  Spot s;
+  s.x = p.x;
+  s.y = p.y + lift;
+  s.z = p.z;
+  s.h = p.h;
+  s.valid = true;
+  return s;
+}
+
+// Yola çek: back onto the road, ~15 m behind the closest recorded road point (away from whatever we hit).
+static void ActionRoad() {
+  if (!g.me.valid) {
+    Notify(SPF_NOTIFICATION_ERROR, "Kamyonun konumu okunamadı. Sürüş ekranında olmalısın.");
+    return;
+  }
+  int n = NearestTrailIdx(400.0);
+  if (n < 0) {
+    Spot d = g.me;  // nothing recorded nearby yet: at least put the truck back on its wheels
+    d.y += 0.6;
+    StartJob(d, "Yakında kayıtlı yol yoktu; kamyon olduğu yerde düzeltildi.", "", true);
+    return;
+  }
+  const TrailPt& closest = g.trail[(size_t)n];
+  int b = n;
+  for (int i = n; i >= 0; --i) {
+    const TrailPt& p = g.trail[(size_t)i];
+    if (p.seg != closest.seg) break;
+    if (!p.good) continue;
+    b = i;
+    if (closest.odo - p.odo >= 15.0) break;
+  }
+  if (StartJob(TrailSpot(g.trail[(size_t)b], 0.3), "Yola çekildin.", "", true)) g.job.endsCrash = true;
+}
+
+// Kendi şeridine geç: back into the lane we were driving in, facing forward, at the closest point where we were
+// still driving properly (after a crash: a moment before it, so not on top of whatever we hit).
+static void ActionLane() {
+  if (!g.me.valid) {
+    Notify(SPF_NOTIFICATION_ERROR, "Kamyonun konumu okunamadı. Sürüş ekranında olmalısın.");
+    return;
+  }
+  int n = NearestTrailIdx(80.0);
+  if (n < 0) {
+    Notify(SPF_NOTIFICATION_WARNING, "Yakında kayıtlı şerit yok. \"Yola çek\"i dene.");
+    return;
+  }
+  const TrailPt& p = g.trail[(size_t)n];
+  // already on that line, facing the same way? (samples are a few metres apart, so compare sideways offset)
+  double th = p.h * 2.0 * kPi;
+  double fx = -std::sin(th), fz = -std::cos(th);  // forward of the recorded point
+  double ox = g.me.x - p.x, oz = g.me.z - p.z;
+  double along = ox * fx + oz * fz, side = std::fabs(ox * fz - oz * fx);
+  if (side < 1.2 && std::fabs(along) < 12.0 && std::fabs(g.me.y - p.y) < 2.0 && std::fabs(HeadDiff(g.me.h - p.h)) < 0.05) {
+    Notify(SPF_NOTIFICATION_INFO, "Zaten kendi şeridindesin.");
+    return;
+  }
+  if (StartJob(TrailSpot(p, 0.3), "Kendi şeridine geçtin.", "", true)) g.job.endsCrash = true;
+}
+
+static void OnHotkeyRoad() {
+  g.roadKeyAt = Now();
+  g.toggleAt = -1.0;  // Shift+F8 was the "Yola çek" chord, not the menu key
+  if (!g.job.active) ActionRoad();
 }
 
 static void ActionRewind(int seconds) {
@@ -915,7 +1117,8 @@ static void ActionRewind(int seconds) {
     Notify(SPF_NOTIFICATION_WARNING, "Henüz kayıtlı yol konumu yok (biraz sür, sonra tekrar dene).");
     return;
   }
-  StartJob(d, seconds < 60 ? Fmt("%d sn önceki konumuna döndün.", seconds) : Fmt("%d dk önceki konumuna döndün.", seconds / 60), "", true);
+  if (StartJob(d, seconds < 60 ? Fmt("%d sn önceki konumuna döndün.", seconds) : Fmt("%d dk önceki konumuna döndün.", seconds / 60), "", true))
+    g.job.endsCrash = true;
 }
 
 static void ActionUndo() {
@@ -1341,11 +1544,18 @@ static void RenderRescueTab(SPF_UI_API* ui) {
   float x, y;
   ui->UI_Dummy(0.0f, 2.0f);
   Cursor(ui, x, y);
-  if (ActionRow(ui, "##ktp_up", ICON_FA_WRENCH, T::kAccent, "Kamyonu düzelt", "Devrildiysen düz koyar", x, y, true, false, ok)) ActionUpright();
-  if (ActionRow(ui, "##ktp_turn", ICON_FA_ROTATE, T::kBlue, "U dönüşü yap", "Ters yöndeysen geri çevirir", x, y, false, false, ok)) ActionTurn();
+  if (ActionRow(ui, "##ktp_road", ICON_FA_ROAD, T::kAccent, "Yola çek", "Yoldan çıktıysan yola geri koyar", x, y, true, false, ok)) ActionRoad();
+  if (ActionRow(ui, "##ktp_lane", ICON_FA_ARROWS_LEFT_RIGHT, T::kBlue, "Kendi şeridine geç", "Karşı şeride düştüysen geri alır", x, y, false, false, ok))
+    ActionLane();
+  if (ActionRow(ui, "##ktp_up", ICON_FA_WRENCH, T::kGray, "Kamyonu düzelt", "Devrildiysen olduğun yerde düz koyar", x, y, false, false, ok)) ActionUpright();
   if (ActionRow(ui, "##ktp_undo", ICON_FA_ROTATE_LEFT, T::kGray, "Son ışınlanmayı geri al", "Önceki yerine döner", x, y, false, true, ok && g.undoSpot.valid))
     ActionUndo();
   Advance(ui, x, y);
+  if (g.kb && g.core && g.core->keybinds && g.core->keybinds->Kbind_GetBindingDisplayName) {
+    char key[64] = "";
+    g.core->keybinds->Kbind_GetBindingDisplayName(g.kb, "Rescue.road", 0, key, (int)sizeof(key));
+    if (key[0]) Caption(ui, (std::string("Kısayol: ") + key + " = Yola çek (menüyü açmadan)").c_str());
+  }
 
   Section(ui, "GERİ SAR");
   static const char* kLabels[] = {"10 sn", "30 sn", "1 dk", "3 dk"};
@@ -1358,6 +1568,48 @@ static void RenderRescueTab(SPF_UI_API* ui) {
   }
   ui->UI_EndDisabled();
   Caption(ui, g.me.valid ? "Kazadan önce yolda düzgün gittiğin son noktaya döner." : "Önce kamyona geç.");
+}
+
+// ---- Toasts: our own notifications, drawn on top of the game (only while one is showing) ----
+static void RenderToasts(SPF_UI_API* ui, void* /*user_data*/) {
+  ui->UI_Dummy(1.0f, 1.0f);
+  if (g.toasts.empty()) return;
+  float vx = 0, vy = 0, vw = 0, vh = 0;
+  ui->UI_GetMainViewportPos(&vx, &vy);
+  ui->UI_GetMainViewportSize(&vw, &vh);
+  SPF_DrawList_Handle dl = ui->UI_GetForegroundDrawList();
+  SPF_Font_Handle font = ui->UI_GetFont("medium");
+  if (font) ui->UI_PushFont(font);
+  const float h = 42.0f, lh = ui->UI_GetTextLineHeight();
+  double now = Now();
+  float y = vy + 64.0f;
+  for (const auto& t : g.toasts) {
+    double age = now - t.t0, left = t.life - age;
+    float a = (float)std::clamp(std::min(age / 0.15, left / 0.35), 0.0, 1.0);
+    if (a <= 0.0f) continue;
+    float slide = (float)(1.0 - std::min(1.0, age / 0.22)) * -10.0f;  // small drop-in
+    const char* icon = ICON_FA_CIRCLE_INFO;
+    T::C ic = T::kAccent;
+    if (t.kind == 1) {
+      icon = ICON_FA_CIRCLE_CHECK;
+      ic = T::kGreen;
+    } else if (t.kind == 2) {
+      icon = ICON_FA_TRIANGLE_EXCLAMATION;
+      ic = T::kYellow;
+    } else if (t.kind == 3) {
+      icon = ICON_FA_CIRCLE_XMARK;
+      ic = T::kRed;
+    }
+    float iw = TextW(ui, icon), tw = TextW(ui, t.text.c_str());
+    float w = 16.0f + iw + 10.0f + tw + 20.0f;
+    float x = vx + (vw - w) * 0.5f, yy = y + slide;
+    ui->UI_DrawList_AddRectFilled(dl, x, yy, x + w, yy + h, U32(T::kCard, a), h * 0.5f, SPF_DRAW_FLAG_ROUND_CORNERS_ALL);
+    ui->UI_DrawList_AddRect(dl, x + 0.5f, yy + 0.5f, x + w - 0.5f, yy + h - 0.5f, U32(T::kLine, 1.6f * a), h * 0.5f, SPF_DRAW_FLAG_ROUND_CORNERS_ALL, 1.0f);
+    ui->UI_DrawList_AddText(dl, x + 16.0f, yy + (h - lh) * 0.5f, U32(ic, a), icon);
+    ui->UI_DrawList_AddText(dl, x + 16.0f + iw + 10.0f, yy + (h - lh) * 0.5f, U32(T::kText, a), t.text.c_str());
+    y += h + 8.0f;
+  }
+  if (font) ui->UI_PopFont();
 }
 
 static void RenderPlacesTab(SPF_UI_API* ui) {
@@ -1461,18 +1713,29 @@ static void RenderSettingsTab(SPF_UI_API* ui) {
   ui->UI_DrawList_AddText(dl, x + 14.0f, y + (h - lh) * 0.5f, U32(T::kText), "Işınlanınca geliştirici modunu kapat");
   if (Toggle(ui, "##ktp_dev", &g.restoreDev, x + T::kW - 12.0f - 46.0f, y + (h - 28.0f) * 0.5f)) SaveSettings();
   y += h;
-  RowBg(ui, x, y, T::kW, h, false, true, T::kCell);
-  char key[64] = "";
-  if (g.kb && g.core && g.core->keybinds && g.core->keybinds->Kbind_GetBindingDisplayName)
-    g.core->keybinds->Kbind_GetBindingDisplayName(g.kb, "MainWindow.toggle", 0, key, (int)sizeof(key));
-  ui->UI_DrawList_AddText(dl, x + 14.0f, y + (h - lh) * 0.5f, U32(T::kText), "Menü tuşu");
-  std::string keyText = key[0] ? key : "F8";
-  float bxw = 92.0f;
-  ui->UI_DrawList_AddText(dl, x + T::kW - 12.0f - bxw - 10.0f - TextW(ui, keyText.c_str()), y + (h - lh) * 0.5f, U32(T::kText2), keyText.c_str());
-  ui->UI_SetCursorScreenPos(x + T::kW - 12.0f - bxw, y + (h - 30.0f) * 0.5f);
-  if (Btn(ui, "Değiştir", BTN_SECONDARY, bxw, 30.0f) && g.kb && g.core->keybinds->Kbind_OpenRebindPopup)
-    g.core->keybinds->Kbind_OpenRebindPopup(g.kb, "MainWindow.toggle", 0);
-  y += h;
+  // key binding rows: label, current key, "Değiştir"
+  struct KeyRow {
+    const char* label;
+    const char* action;
+    const char* fallback;
+  };
+  static const KeyRow kKeys[] = {{"Menü tuşu", "MainWindow.toggle", "F8"}, {"Yola çek tuşu", "Rescue.road", "Shift+F8"}};
+  for (int k = 0; k < 2; ++k) {
+    RowBg(ui, x, y, T::kW, h, false, k == 1, T::kCell);
+    char key[64] = "";
+    if (g.kb && g.core && g.core->keybinds && g.core->keybinds->Kbind_GetBindingDisplayName)
+      g.core->keybinds->Kbind_GetBindingDisplayName(g.kb, kKeys[k].action, 0, key, (int)sizeof(key));
+    ui->UI_DrawList_AddText(dl, x + 14.0f, y + (h - lh) * 0.5f, U32(T::kText), kKeys[k].label);
+    std::string keyText = key[0] ? key : kKeys[k].fallback;
+    float bxw = 92.0f;
+    ui->UI_DrawList_AddText(dl, x + T::kW - 12.0f - bxw - 10.0f - TextW(ui, keyText.c_str()), y + (h - lh) * 0.5f, U32(T::kText2), keyText.c_str());
+    ui->UI_SetCursorScreenPos(x + T::kW - 12.0f - bxw, y + (h - 30.0f) * 0.5f);
+    ui->UI_PushID_Int(k);
+    if (Btn(ui, "Değiştir", BTN_SECONDARY, bxw, 30.0f) && g.kb && g.core->keybinds->Kbind_OpenRebindPopup)
+      g.core->keybinds->Kbind_OpenRebindPopup(g.kb, kKeys[k].action, 0);
+    ui->UI_PopID();
+    y += h;
+  }
   Advance(ui, x, y);
 
   ui->UI_Dummy(0.0f, 2.0f);
@@ -1555,10 +1818,19 @@ static void RenderMain(SPF_UI_API* ui, void* /*user_data*/) {
   ui->UI_PopStyleVar(4);
 }
 
-static void OnToggleMainWindow() {
+static void ToggleMainWindow() {
   if (!g.ui || !g.win) return;
   bool vis = g.ui->UI_IsVisible(g.win);
   g.ui->UI_SetVisibility(g.win, !vis);
+}
+
+static void OnToggleMainWindow() {
+  // With Shift held this F8 may be part of the Shift+F8 "Yola çek" chord: decide a moment later (OnUpdate)
+  if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+    g.toggleAt = Now();
+    return;
+  }
+  ToggleMainWindow();
 }
 
 // =====================================================================================
@@ -1594,6 +1866,12 @@ static void BuildManifest(SPF_Manifest_Builder_Handle* h, const SPF_Manifest_Bui
   // Texts come from localization/<lang>.json next to the DLL.
   api->Meta_AddWindow(h, "MainWindow", "MainWindow.title", "MainWindow.desc");
   api->Meta_AddKeybind(h, "MainWindow", "toggle", "keybinds.toggle.title", "keybinds.toggle.desc");
+  // "Yola çek" without opening the menu
+  api->Defaults_AddKeybind(h, "Rescue", "road", "chord", "keyboard:KEY_LSHIFT+keyboard:KEY_F8", "always");
+  api->Meta_AddKeybind(h, "Rescue", "road", "keybinds.road.title", "keybinds.road.desc");
+  // our own notifications: a non-interactive overlay window, only visible while a toast is showing
+  api->Defaults_AddWindow(h, "Toast", false, false, 0, 0, 8, 8, false, false);
+  api->Meta_AddWindow(h, "Toast", "Toast.title", "Toast.desc");
 }
 
 static void OnLoad(const SPF_Load_API* load_api) {
@@ -1629,7 +1907,10 @@ static void OnActivated(const SPF_Core_API* core_api) {
 
   if (core_api->keybinds) {
     g.kb = core_api->keybinds->Kbind_GetContext(PLUGIN_NAME);
-    if (g.kb) core_api->keybinds->Kbind_Register(g.kb, "MainWindow.toggle", OnToggleMainWindow);
+    if (g.kb) {
+      core_api->keybinds->Kbind_Register(g.kb, "MainWindow.toggle", OnToggleMainWindow);
+      core_api->keybinds->Kbind_Register(g.kb, "Rescue.road", OnHotkeyRoad);
+    }
   }
   if (core_api->telemetry) g.tel = core_api->telemetry->Tel_GetContext(PLUGIN_NAME);
 
@@ -1670,6 +1951,12 @@ static void OnRegisterUI(SPF_UI_API* ui_api) {
                                                              SPF_WINDOW_FLAG_NO_COLLAPSE | SPF_WINDOW_FLAG_ALWAYS_AUTO_RESIZE |
                                                              SPF_WINDOW_FLAG_NO_DOCKING));
   g.win = ui_api->UI_GetWindowHandle(PLUGIN_NAME, "MainWindow");
+  ui_api->UI_RegisterDrawCallbackWithFlags(
+      PLUGIN_NAME, "Toast", RenderToasts, nullptr,
+      (SPF_WindowFlags)(SPF_WINDOW_FLAG_NO_TITLE_BAR | SPF_WINDOW_FLAG_NO_BACKGROUND | SPF_WINDOW_FLAG_NO_SCROLLBAR | SPF_WINDOW_FLAG_NO_COLLAPSE |
+                        SPF_WINDOW_FLAG_NO_MOUSE_INPUTS | SPF_WINDOW_FLAG_NO_FOCUS_ON_APPEARING | SPF_WINDOW_FLAG_NO_BRING_TO_FRONT_ON_FOCUS |
+                        SPF_WINDOW_FLAG_NO_NAV_INPUTS | SPF_WINDOW_FLAG_NO_NAV_FOCUS | SPF_WINDOW_FLAG_NO_DOCKING | SPF_WINDOW_FLAG_ALWAYS_AUTO_RESIZE));
+  g.toastWin = ui_api->UI_GetWindowHandle(PLUGIN_NAME, "Toast");
 }
 
 static void OnUpdate() {
@@ -1677,6 +1964,12 @@ static void OnUpdate() {
   double now = Now();
 
   ReadTelemetry(false);
+
+  // menu key pressed with Shift and no "Yola çek" chord followed: it really was the menu key
+  if (g.toggleAt >= 0 && now - g.toggleAt > 0.25) {
+    g.toggleAt = -1.0;
+    if (now - g.roadKeyAt > 0.6) ToggleMainWindow();
+  }
 
   // convoy session tracking
   void* cm = ChatManager();
@@ -1744,15 +2037,31 @@ static void OnUpdate() {
     if (vis && !g.wasVisible && InConvoy() && now - g.lastQuery > 5.0) SendQuery();
     g.wasVisible = vis;
   }
+
+  // toasts: drop expired ones; the overlay window is only visible while something is showing
+  g.toasts.erase(std::remove_if(g.toasts.begin(), g.toasts.end(), [now](const Ctx::Toast& t) { return now - t.t0 > t.life; }), g.toasts.end());
+  if (g.ui && g.toastWin) {
+    bool want = !g.toasts.empty();
+    if (g.ui->UI_IsVisible(g.toastWin) != want) g.ui->UI_SetVisibility(g.toastWin, want);
+  }
+}
+
+static void ForgetCrash() {
+  g.crashT = -1e9;
+  g.airReads = 0;
+  g.calmUntil = Now() + 5.0;  // the truck is placed into the world: not a crash
+  g.substCheckedAt = -100;    // re-read the surface list for this world
 }
 
 static void OnGameWorldReady() {
   g.trail.clear();
+  ForgetCrash();
   g.undoSpot.valid = false;
 }
 
 static void OnWorldUnloaded() {
   g.trail.clear();
+  ForgetCrash();
   g.peers.clear();
   g.undoSpot.valid = false;
   g.job.active = false;

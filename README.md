@@ -1,10 +1,12 @@
 # KonvoyTP — ETS2 Konvoy Işınlanma Modu
 
 Euro Truck Simulator 2'de konvoydayken **arkadaşının yanına tek tıkla ışınlan**, **onu yanına çek**,
-**devrilen kamyonu düzelt**, **ters yöne girdiysen U dönüşü yap**, kazadan önceki yere **geri sar**.
-Oyun içinde **F8** ile açılan küçük, sade bir menü.
+kaza yapınca **yola çek** ya da **kendi şeridine geç**, devrilen kamyonu düzelt, kazadan önceki yere **geri sar**.
+Oyun içinde **F8** ile açılan küçük, sade bir menü. **Shift+F8** menüyü açmadan seni yola çeker.
 
 ![KonvoyTP arayüzü](ekran-goruntuleri/arayuz.png)
+
+<sub>Görüntü 1.1 sürümünden. 1.2'de Kurtar sekmesinin başında artık **Yola çek** ve **Kendi şeridine geç** var.</sub>
 
 ---
 
@@ -18,6 +20,7 @@ Oyun içinde **F8** ile açılan küçük, sade bir menü.
 
 > Konvoyda ışınlanmak istediğin **herkesin** bu kurulumu yapması gerekir (konumlar mod üzerinden paylaşılır).
 > Kurulum oyun klasörünü kendisi bulur, gerekli **SPF Framework**'ü de kurar; hiçbir dosyayı elle taşımana gerek yok.
+> **Güncellemek için** de aynısını yap: yeni zip'i indir, oyun kapalıyken `KUR.bat`. Ayarların ve kayıtlı yerlerin kalır.
 
 **Kaldırmak için:** oyun kapalıyken aynı klasördeki **`KALDIR.bat`**.
 
@@ -30,18 +33,24 @@ Oyun içinde **F8** ile açılan küçük, sade bir menü.
 | **Konvoy** | **Git** | Arkadaşının ~25 m arkasına, yolun üstüne, onun baktığı yöne ışınlanırsın |
 | | **Getir** | Arkadaşını senin arkana çeker (izin verdiyse) |
 | | **Herkesi yanıma topla** | İzin veren herkesi arkana dizer |
-| **Kurtar** | **Kamyonu düzelt** | Devrildiysen kamyonu olduğun yerde tekerleklerinin üstüne, düz koyar |
-| | **U dönüşü yap** | Ters yöne girdiysen kamyonu olduğun yerde geri yöne çevirir |
+| **Kurtar** | **Yola çek** · `Shift+F8` | Yoldan çıktıysan, tarlaya uçtuysan, bir yere sıkıştıysan kamyonu en yakın yola, gittiğin yöne doğru koyar. Oyunun F7 → 2'si gibi, ama her yerde çalışır |
+| | **Kendi şeridine geç** | Kazada karşı şeride düştüysen kamyonu kendi şeridine, doğru yöne bakacak şekilde geri alır |
+| | **Kamyonu düzelt** | Devrildiysen kamyonu olduğun yerde tekerleklerinin üstüne, düz koyar |
 | | **Son ışınlanmayı geri al** | Yanlışlıkla ışınlandıysan (ya da biri seni çektiyse) önceki yerine döner |
 | | **Geri sar 10 sn · 30 sn · 1 dk · 3 dk** | Kazadan/uçuştan önce yolda düzgün gittiğin son noktaya döner |
 | **Yerler** | **Kaydet / Git** | Bir yeri adıyla kaydet, sonra tek tıkla oraya dön; koordinata git |
-| **Ayarlar** | | Görünen adın, seni kimin çekebileceği, menü tuşu |
+| **Ayarlar** | | Görünen adın, seni kimin çekebileceği, tuşlar (F8 menü, Shift+F8 yola çek) |
 
+- **Akıllı kurtarma:** Mod, sen düzgün sürerken (dik, ileri giderken, kaymadan, asfaltta) geçtiğin yolu arka planda
+  not eder. Kaza anlarını — savrulma, devrilme, havada uçma — kendisi anlar; o anları, hemen öncesini ve çim/toprak
+  zemini yok sayar. Bu yüzden **Yola çek** ve **Kendi şeridine geç** kamyonu hep daha önce düzgün sürdüğün şeride
+  koyar: çimene, tarlaya ya da çarptığın aracın üstüne değil. Hiç sürmediğin bir yerde **Yola çek** kamyonu olduğu yerde düzeltir.
 - **Yönetici (admin):** konvoyu kuran kişi (host). Herkes Ayarlar'dan kimin kendisini çekebileceğini seçer:
   **Sadece host** (varsayılan) · **Herkes** · **Kimse**. "Git" ile herkes istediği arkadaşına gidebilir.
-- **Hızlı:** yakın ışınlanmalar (düzelt, U dönüşü, kısa geri sar) **yükleme ekranı olmadan anında** olur.
+- **Hızlı:** yakın ışınlanmalar (yola çek, şerit, düzelt, kısa geri sar) **yükleme ekranı olmadan anında** olur.
   Uzağa ışınlanırken oyun o bölgeyi yüklesin diye kısa bir yükleme ekranı çıkar (kamyon yerin içinden düşmesin diye).
-- **Hafif:** menü kapalıyken hiçbir şey çizmez; konum mesajları sadece butona basınca gider.
+- **Bildirimler:** ekranın üst ortasında, menüyle aynı tasarımda küçük bir kutucukta çıkar, birkaç saniyede kaybolur.
+- **Hafif:** menü kapalıyken menüyü hiç çizmez; konum mesajları sadece butona basınca gider.
 - Menünün üstündeki nokta: **gri** tek başına · **yeşil** konvoyda, bağlantı tamam · **sarı** kontrol ediliyor · **kırmızı** sorun var.
 
 ---
@@ -57,8 +66,11 @@ Bu yüzden dağıtım buradan, tek zip + `KUR.bat` ile yapılıyor.
 Konumlar konvoy sohbeti üzerinden gizli mesajlarla paylaşılır. Modu kurulu olanlar bunları görmez;
 kurulu olmayanlar görür. Herkes kurunca sorun kalmaz.
 
-**Menü F8 ile açılmıyor.**
-`KUR.bat`'ı oyun kapalıyken tekrar çalıştır. Tuş başka bir şeyle çakışıyorsa: Ayarlar → Menü tuşu → Değiştir.
+**Menü F8 ile açılmıyor / Shift+F8 çalışmıyor.**
+`KUR.bat`'ı oyun kapalıyken tekrar çalıştır. Tuş başka bir şeyle çakışıyorsa: Ayarlar → Menü tuşu (ya da Yola çek tuşu) → Değiştir.
+
+**"Kendi şeridine geç" beni biraz geriye koydu?**
+Bilerek: kamyon, kazadan bir an önce düzgün gittiğin noktaya konur ki çarptığın aracın üstüne düşmesin.
 
 **Nokta kırmızı / arkadaş listesi boş.**
 Arkadaşında da mod kurulu ve aynı konvoyda olmalı; Konvoy sekmesinde **Yenile**'ye bas.
@@ -90,7 +102,7 @@ Visual Studio 2022/2026 (C++ masaüstü iş yükü) gerekir.
 
 ```bat
 build.bat                     :: build\out\KonvoyTP\KonvoyTP.dll
-tests\run_tests.bat           :: oyunsuz mantık testleri (konvoy protokolü, izinler, iz/geri sar)
+tests\run_tests.bat           :: oyunsuz mantık testleri (konvoy protokolü, izinler, iz, kaza algılama, yola çek/şerit)
 powershell -ExecutionPolicy Bypass -File paketle.ps1   :: dist\KonvoyTP_Kurulum.zip (SPF'yi kendisi indirir)
 ```
 
@@ -98,16 +110,20 @@ powershell -ExecutionPolicy Bypass -File paketle.ps1   :: dist\KonvoyTP_Kurulum.
 Işınlanma oyunun `cheat teleport X;Y;Z;yön` komutuyla yapılır; oyunun ışınlanma fonksiyonu konvoyu
 destekler (diğer oyuncular seni yeni yerinde görür). Yakın ışınlanmalarda oyunun yükleme ekranı çağrısı
 atlanır. Arkadaş konumları konvoy sohbetine kancayla (`@@mp_chat_system@@` / `@@mp_chat_no_admin@@`)
-gönderilen gizli `#KTP1 ...` satırlarıyla paylaşılır; "yanına git/getir" noktaları, oyuncuların gerçekten
-sürdüğü yoldan kaydedilen izden seçildiği için araç her zaman yolun üstüne iner.
+gönderilen gizli `#KTP1 ...` satırlarıyla paylaşılır. "Yanına git/getir", "yola çek" ve "şeridine geç" noktaları,
+oyuncuların gerçekten sürdüğü yoldan kaydedilen izden seçilir. İz kaydı telemetriden kayma açısını (hız vektörü
+ve 0,1 sn'lik hareket yönü), devrilmeyi, tekerleklerin yere değip değmediğini ve zemin türünü (asfalt/çim/toprak)
+kontrol eder; kaza anları ve hemen öncesi izden çıkarılır.
 
 ---
 
 ## English (short)
 
 KonvoyTP is an [SPF-Framework](https://github.com/TrackAndTruckDevs/SPF-Framework) plugin for Euro Truck Simulator 2
-(1.62) Convoy mode: teleport to a friend, pull friends to you (host), fix a flipped truck, U-turn, rewind to the last
-good road position, saved places. Press **F8** in game.
+(1.62) Convoy mode: teleport to a friend, pull friends to you (host), get back on the road (**Shift+F8**, works where
+the game's F7 recovery fails), back to your own lane after a crash, fix a flipped truck, rewind to the last good road
+position, saved places. Recovery points come from a trail of positions where you were driving normally; skids,
+roll-overs, flights and grass/dirt are detected and skipped. Press **F8** in game.
 Install: download **[KonvoyTP_Kurulum.zip](https://github.com/unsalable/KonvoyTP/releases/latest/download/KonvoyTP_Kurulum.zip)**,
 extract, close the game, run **`KUR.bat`**. Not available on Steam Workshop because Workshop items cannot load native plugins.
 

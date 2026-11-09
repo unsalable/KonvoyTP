@@ -30,12 +30,38 @@ static std::vector<std::string> g_cmds, g_sent, g_shown;
 static uint16_t g_myId = 3;
 static int g_cheatsOnAfter = 0;  // number of "disabled" answers before cheats work
 
+// wheels / surface / velocity (tests 1-17 run without them, like a game that does not report them)
+static int g_wheels = 0;
+static bool g_onGround = true;
+static int g_airTicks = 0;  // > 0: the truck is in the air for this many reads (dropped after a teleport)
+static uint32_t g_subst = 1;
+static SPF_FVector g_vel{};
+static const char* kSubstances[] = {"static", "road", "road_snow", "dirt", "grass"};
+
 static void Tel_GetTruckData(SPF_Telemetry_Handle*, SPF_TruckData* out, size_t) {
   memset(out, 0, sizeof(*out));
   out->world_placement = g_truck;
   out->speed = g_speed;
+  out->local_linear_velocity = g_vel;
+  bool og = g_onGround && g_airTicks <= 0;
+  if (g_airTicks > 0) --g_airTicks;
+  for (int i = 0; i < g_wheels; ++i) {
+    out->wheels[i].on_ground = og;
+    out->wheels[i].substance = g_subst;
+  }
 }
 static void Tel_GetGameState(SPF_Telemetry_Handle*, SPF_GameState* out, size_t) { memset(out, 0, sizeof(*out)); }
+static void Tel_GetCommonData(SPF_Telemetry_Handle*, SPF_CommonData* out, size_t) {
+  memset(out, 0, sizeof(*out));
+  for (int i = 0; i < 5; ++i) strcpy(out->substances[i], kSubstances[i]);
+  out->substance_count = 5;
+}
+static int CountGood(double minX, double maxX) {
+  int n = 0;
+  for (auto& p : g.trail)
+    if (p.good && p.x >= minX && p.x <= maxX) ++n;
+  return n;
+}
 
 static int Con_IsCheats() { return g_cheatsOnAfter <= 0 ? 1 : 0; }
 static void Con_Enable() {}
@@ -53,6 +79,7 @@ static int Con_ExecEx(const char* c, char* err, int n) {
     double h = a / (2.0 * kPi);
     if (h < 0) h += 1.0;
     g_truck.orientation.heading = h;
+    if (g_wheels) g_airTicks = 4;  // dropped onto the spot
     return 1;
   }
   return 0;
@@ -89,6 +116,7 @@ int main() {
   static SPF_Telemetry_API tel{};
   tel.Tel_GetTruckData = Tel_GetTruckData;
   tel.Tel_GetGameState = Tel_GetGameState;
+  tel.Tel_GetCommonData = Tel_GetCommonData;
   static SPF_GameConsole_API con{};
   con.GCon_IsCheatsEnabled = Con_IsCheats;
   con.GCon_EnableCheats = Con_Enable;
@@ -242,6 +270,203 @@ int main() {
   Incoming(5, "#KTP1 ZZZ q w e r t y");
   Tick();
   CHECK(true, "no crash on malformed input");
+
+  std::cout << "13) 'Kendi şeridine geç' after a crash into the oncoming lane\n";
+  RunUntilIdle();
+  g.trail.clear();
+  g_truck = SPF_DPlacement{};
+  g_truck.position = {0.0, 0.0, 0.0};
+  g_truck.orientation.heading = 0.0;  // driving north (-Z), our lane is x = 0
+  g_speed = 15.0f;
+  for (int i = 0; i < 300; ++i) {  // 300 m in our lane
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  double zBeforeCrash = g_truck.position.z;
+  for (int i = 0; i < 3; ++i) {  // skid diagonally into the oncoming lane, nose still north
+    g_truck.position.x -= 1.5;
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  g_speed = 0.0f;
+  g_truck.orientation.heading = 0.42;  // spun around
+  Tick(0.1);
+  int skidGood = 0;
+  for (auto& p : g.trail)
+    if (p.x < -0.5 && p.good) ++skidGood;
+  CHECK(skidGood == 0, "skidding points are not used as road positions");
+  g_cmds.clear();
+  ActionLane();
+  RunUntilIdle();
+  double lx = 0, ly = 0, lz = 0, la = 0;
+  bool laneCmd = sscanf(LastCmd().c_str(), "cheat teleport %lf;%lf;%lf;%lf;", &lx, &ly, &lz, &la) == 4;
+  CHECK(laneCmd && std::fabs(lx) < 0.01, "back to our lane (x = 0): " + LastCmd());
+  CHECK(laneCmd && lz - zBeforeCrash > 4.0 && lz - zBeforeCrash < 25.0,
+        "a short, safe bit before the crash point (not on top of what we hit)");
+  CHECK(laneCmd && std::fabs(la) < 0.01, "facing the driving direction again");
+
+  std::cout << "14) 'Kendi şeridine geç' when already in lane does nothing\n";
+  g_cmds.clear();
+  ActionLane();
+  RunUntilIdle();
+  CHECK(g_cmds.empty(), "no teleport when already in lane");
+
+  std::cout << "15) 'Yola çek' from off-road puts the truck ~15 m behind on the road\n";
+  g_truck.position.x = 30.0;  // flipped in a field next to the road
+  g_truck.orientation.pitch = 0.2;
+  g_truck.orientation.heading = 0.3;
+  Tick(0.1);
+  double zNear = g_truck.position.z;
+  g_cmds.clear();
+  ActionRoad();
+  RunUntilIdle();
+  double rx = 0, ry = 0, rz = 0, ra = 0;
+  bool roadCmd = sscanf(LastCmd().c_str(), "cheat teleport %lf;%lf;%lf;%lf;", &rx, &ry, &rz, &ra) == 4;
+  CHECK(roadCmd && std::fabs(rx) < 0.01 && std::fabs(ra) < 0.01, "on the road, facing forward: " + LastCmd());
+  CHECK(roadCmd && (rz - zNear) > 10.0 && (rz - zNear) < 25.0, "a bit behind the nearest road point");
+  g_truck.orientation.pitch = 0.0;
+
+  std::cout << "16) 'Yola çek' with no recorded road falls back to putting the truck upright\n";
+  g.trail.clear();
+  g_truck.position = {5000.0, 50.0, 5000.0};
+  Tick(0.1);
+  g_cmds.clear();
+  ActionRoad();
+  RunUntilIdle();
+  CHECK(LastCmd().rfind("cheat teleport 5000.000;50.600;5000.000;", 0) == 0, "upright in place: " + LastCmd());
+
+  std::cout << "17) our toasts: max 3 at once, they disappear by themselves\n";
+  for (int i = 0; i < 5; ++i) Notify(SPF_NOTIFICATION_SUCCESS, Fmt("bildirim %d", i));
+  CHECK(g.toasts.size() == 3, "only the 3 newest toasts are kept");
+  for (int i = 0; i < 60; ++i) Tick(0.1);
+  CHECK(g.toasts.empty(), "toasts expire");
+
+  auto parseCmd = [](double& x, double& y, double& z, double& a) {
+    return sscanf(LastCmd().c_str(), "cheat teleport %lf;%lf;%lf;%lf;", &x, &y, &z, &a) == 4;
+  };
+
+  std::cout << "18) after a crash, driving on in the wrong lane does not fool 'Kendi şeridine geç'\n";
+  RunUntilIdle();
+  g.trail.clear();
+  g_truck = SPF_DPlacement{};
+  g_truck.position = {2000.0, 0.0, 0.0};
+  g_speed = 15.0f;
+  for (int i = 0; i < 200; ++i) {
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  double zCrash = g_truck.position.z;
+  for (int i = 0; i < 3; ++i) {  // pushed into the oncoming lane
+    g_truck.position.x -= 1.5;
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  for (int i = 0; i < 40; ++i) {  // ...and driven on there for 40 m
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  g_speed = 0.0f;
+  CHECK(CountGood(1994.0, 1996.0) > 5, "(the wrong-lane driving itself looks normal)");
+  g_cmds.clear();
+  ActionLane();
+  RunUntilIdle();
+  double ax = 0, ay = 0, az = 0, aa = 0;
+  bool aOk = parseCmd(ax, ay, az, aa);
+  CHECK(aOk && std::fabs(ax - 2000.0) < 0.01, "back to the lane we drove in before the crash: " + LastCmd());
+  CHECK(aOk && az - zCrash > 4.0 && az - zCrash < 25.0, "just before the crash point");
+
+  std::cout << "19) grass and dirt are never used as road positions\n";
+  g.trail.clear();
+  g_truck = SPF_DPlacement{};
+  g_truck.position = {4000.0, 0.0, 0.0};
+  g_wheels = 6;
+  g_onGround = true;
+  g_subst = 1;  // "road"
+  g_speed = 10.0f;
+  for (int i = 0; i < 100; ++i) {
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  g_subst = 2;  // "road_snow" is still road
+  for (int i = 0; i < 30; ++i) {
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  CHECK(CountGood(3999.0, 4001.0) > 30, "asphalt (also snowy) is recorded");
+  g_truck.orientation.heading = 0.75;  // turn east, off the road into a field
+  g_subst = 4;                         // "grass"
+  for (int i = 0; i < 40; ++i) {
+    g_truck.position.x += 1.0;
+    Tick(0.1);
+  }
+  g_subst = 3;  // "dirt"
+  for (int i = 0; i < 20; ++i) {
+    g_truck.position.x += 1.0;
+    Tick(0.1);
+  }
+  g_speed = 0.0f;
+  CHECK(CountGood(4002.0, 5000.0) == 0, "no road positions in the field");
+  g_cmds.clear();
+  ActionRoad();
+  RunUntilIdle();
+  double bx = 0, by = 0, bz = 0, ba = 0;
+  bool bOk = parseCmd(bx, by, bz, ba);
+  CHECK(bOk && std::fabs(bx - 4000.0) < 0.01 && std::fabs(ba) < 0.01, "'Yola çek' from the field goes to the road: " + LastCmd());
+  g_subst = 1;
+
+  std::cout << "20) flying through the air is a crash; dropping after our own teleport is not\n";
+  g.trail.clear();
+  g_truck = SPF_DPlacement{};
+  g_truck.position = {6000.0, 0.0, 0.0};
+  g_speed = 10.0f;
+  for (int i = 0; i < 100; ++i) {
+    g_truck.position.z -= 1.0;
+    Tick(0.1);
+  }
+  g_onGround = false;
+  for (int i = 0; i < 8; ++i) {  // launched
+    g_truck.position.z -= 1.0;
+    g_truck.position.y += 0.6;
+    Tick(0.1);
+  }
+  CHECK(g_testNow - g.crashT < 1.0, "flight detected");
+  int airGood = 0;
+  for (auto& p : g.trail)
+    if (p.good && p.y > 0.1) ++airGood;
+  CHECK(airGood == 0, "positions in the air are not road positions");
+  g_onGround = true;
+  g_truck.position.y = 0.0;
+  g_speed = 0.0f;
+  for (int i = 0; i < 40; ++i) Tick(0.1);
+  double crashBefore = g.crashT;
+  ActionUpright();
+  RunUntilIdle();
+  CHECK(g.crashT == crashBefore, "our own teleport drop is not a crash");
+
+  std::cout << "21) a sideways slide (from the truck's own velocity) is not a road position\n";
+  g.trail.clear();
+  g_truck = SPF_DPlacement{};
+  g_truck.position = {8000.0, 0.0, 0.0};
+  g_speed = 12.0f;
+  g_vel = {0.0f, 0.0f, -12.0f};  // straight ahead
+  for (int i = 0; i < 60; ++i) {
+    g_truck.position.z -= 1.2;
+    Tick(0.1);
+  }
+  size_t before = g.trail.size();
+  CHECK(CountGood(7999.0, 8001.0) > 10, "normal driving is recorded");
+  g_vel = {8.0f, 0.0f, -9.0f};  // sliding ~42 deg sideways
+  for (int i = 0; i < 10; ++i) {
+    g_truck.position.z -= 1.2;
+    Tick(0.1);
+  }
+  int slideGood = 0;
+  for (size_t i = before; i < g.trail.size(); ++i)
+    if (g.trail[i].good) ++slideGood;
+  CHECK(slideGood == 0, "slide samples are not road positions");
+  CHECK(g_testNow - g.crashT < 1.0, "slide detected as a crash");
+  g_vel = SPF_FVector{};
+  g_speed = 0.0f;
 
   std::cout << "\n" << g_pass << " passed, " << g_fail << " failed\n";
   return g_fail == 0 ? 0 : 1;

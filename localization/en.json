@@ -3,10 +3,18 @@
         "title": "Konvoy Işınlanma",
         "desc": "Arkadaşına ışınlan, yanına çek, kamyonu kurtar."
     },
+    "Toast": {
+        "title": "Konvoy Işınlanma bildirimleri",
+        "desc": "Işınlanma sonrası çıkan kısa bildirimler."
+    },
     "keybinds": {
         "toggle": {
             "title": "Konvoy Işınlanma menüsü",
             "desc": "Menüyü açar / kapatır."
+        },
+        "road": {
+            "title": "Yola çek",
+            "desc": "Yoldan çıktıysan menüyü açmadan seni yola geri koyar."
         }
     }
 }

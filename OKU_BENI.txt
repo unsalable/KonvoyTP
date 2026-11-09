@@ -1,28 +1,50 @@
 ﻿=====================================================================
-  KonvoyTP - ETS2 Konvoy Işınlanma Modu   (sürüm 1.1.0, ETS2 1.62)
+  KonvoyTP - ETS2 Konvoy Işınlanma Modu   (sürüm 1.2.0, ETS2 1.62)
 =====================================================================
 
 NE İŞE YARAR?
   Kamyondayken F8'e bas; küçük, sade bir menü açılır (tekrar F8 ya da
   sağ üstteki ✕ ile kapanır, boş bir yerinden tutup taşıyabilirsin).
+  Shift+F8: menüyü açmadan "Yola çek".
 
   Konvoy   Modu kurulu arkadaşların, uzaklıkları ile.
            "Git"    -> arkadaşının ~25 m arkasına, yolun üstüne, onun
                        baktığı yöne doğru ışınlanırsın.
            "Getir"  -> arkadaşını senin arkana çeker (izin verdiyse).
            "Herkesi yanıma topla" -> izin veren herkesi arkana dizer.
-  Kurtar   "Kamyonu düzelt"  -> devrildiysen kamyonu olduğun yerde
-                       tekerleklerinin üstüne, düz koyar.
-           "U dönüşü yap"    -> ters yöne girdiysen kamyonu olduğun yerde
-                       geri yöne çevirir (karşı şeride geçmiş gibi görünür).
-           "Son ışınlanmayı geri al" -> yanlışlıkla ışınlandıysan ya da
-                       biri seni çektiyse önceki yerine döner.
-           "Geri sar 10 sn / 30 sn / 1 dk / 3 dk" -> kazadan, uçuştan
-                       önce yolda düzgün gittiğin son noktaya döndürür.
-           (F7 > 2 çalışmadığında bunlar işe yarar.)
+  Kurtar   "Yola çek"  (kısayol Shift+F8)
+                    -> yoldan çıktıysan, tarlaya uçtuysan, bir yere
+                       sıkıştıysan kamyonu en yakın yola, gittiğin yöne
+                       doğru koyar. Oyunun F7 > 2'si gibi ama her yerde
+                       çalışır.
+           "Kendi şeridine geç"
+                    -> kazada karşı şeride düştüysen kamyonu kendi
+                       şeridine, doğru yöne bakacak şekilde geri alır.
+           "Kamyonu düzelt"
+                    -> devrildiysen kamyonu olduğun yerde tekerleklerinin
+                       üstüne, düz koyar.
+           "Son ışınlanmayı geri al"
+                    -> yanlışlıkla ışınlandıysan ya da biri seni
+                       çektiyse önceki yerine döner.
+           "Geri sar 10 sn / 30 sn / 1 dk / 3 dk"
+                    -> kazadan, uçuştan önce yolda düzgün gittiğin son
+                       noktaya döndürür.
   Yerler   Bulunduğun yeri adıyla kaydet, sonra tek tıkla oraya dön.
            Koordinat (X Y Z) yazıp oraya git.
-  Ayarlar  Görünen adın, seni kimin çekebileceği, menü tuşu.
+  Ayarlar  Görünen adın, seni kimin çekebileceği, tuşlar.
+
+  "YOLA ÇEK" VE "KENDİ ŞERİDİNE GEÇ" NEDEN HEP DOĞRU YERE KOYAR?
+  Mod, sen normal sürerken (dik, ileri giderken, kaymadan, asfaltta)
+  geçtiğin yolu arka planda not eder. Kaza anını (savrulma, devrilme,
+  havada uçma) kendisi anlar; o anları, hemen öncesini ve çim/toprak
+  zemini yok sayar. Böylece kamyon hep daha önce düzgün sürdüğün
+  şeride, doğru yöne bakacak şekilde konur; çimene, tarlaya ya da
+  çarptığın aracın üstüne konmaz. Bu yüzden kamyon kaza noktasının
+  biraz gerisine konabilir, bu bilerek böyle.
+  Hiç sürmediğin bir yerde "Yola çek" kamyonu olduğu yerde düzeltir.
+
+  Bildirimler ekranın üst ortasında, menüyle aynı tasarımda küçük bir
+  kutucukta çıkar ve birkaç saniyede kendiliğinden kaybolur.
 
   Menünün üstündeki nokta durumu gösterir:
      gri   = tek başınasın           yeşil = konvoyda, bağlantı tamam
@@ -39,6 +61,9 @@ KURULUM (herkes yapmalı: sen ve arkadaşların)
   2) KUR.bat dosyasına çift tıkla. Oyun klasörünü kendisi bulur,
      SPF Framework yoksa onu da kurar, eklentiyi açık hale getirir.
   3) Oyunu aç, profilini yükle, kamyondayken F8'e bas.
+
+  GÜNCELLEME: yeni sürümün KUR.bat'ını oyun kapalıyken çalıştırman
+  yeterli. Ayarların ve kayıtlı yerlerin olduğu gibi kalır.
 
   Not: Mod, oyunun "bin\win_x64\plugins" klasörüne kurulur. Oyunun
   Mod Yöneticisi'nde görünmez, orada açman gerekmez.
@@ -66,15 +91,17 @@ NASIL IŞINLIYOR?
   Konsolu (~) açmana ya da config.cfg'ye dokunmana gerek yok.
   Oyunun ışınlanma fonksiyonu konvoyu destekler: diğer oyuncular seni
   yeni yerinde görür; çakışan araçlar sunucu ayarına göre hayalet olur.
-  Yakın ışınlanmalar (kamyonu düzelt, U dönüşü, kısa geri sar) yükleme
-  ekranı olmadan anında olur. Uzağa (ör. arkadaşının yanına) ışınlanınca
-  oyun o bölgeyi yüklesin diye birkaç saniyelik yükleme ekranı çıkar;
-  bu, kamyonun henüz yüklenmemiş yerin içinden düşmemesi içindir.
+  Yakın ışınlanmalar (yola çek, şeridine geç, kamyonu düzelt, kısa geri
+  sar) yükleme ekranı olmadan anında olur. Uzağa (ör. arkadaşının
+  yanına) ışınlanınca oyun o bölgeyi yüklesin diye birkaç saniyelik
+  yükleme ekranı çıkar; bu, kamyonun henüz yüklenmemiş yerin içinden
+  düşmemesi içindir.
 
 SORUN GİDERME
-  - F8 menüyü açmıyor:
+  - F8 menüyü açmıyor / Shift+F8 çalışmıyor:
       * SPF Framework yüklü mü? Değilse KUR.bat'ı tekrar çalıştır.
-      * Tuş başka bir şeyle çakışıyorsa: Ayarlar > Menü tuşu > Değiştir.
+      * Tuş başka bir şeyle çakışıyorsa: Ayarlar > Menü tuşu (ya da
+        Yola çek tuşu) > Değiştir.
   - Nokta kırmızı ("Konvoy sohbetine ulaşılamadı"):
       Ayarlar > Teşhis bilgisi'ne bak. "Sohbet kancaları: YOK" ise oyun
       güncellenmiş olabilir; SPF ve KonvoyTP güncellemesi gerekir.
@@ -82,9 +109,11 @@ SORUN GİDERME
     olmalı ve aynı konvoyda olmalı.
   - "Işınlanma olmadı" hatası: kamyonda (sürüş ekranında) olmalısın;
     garaj/menü ekranında çalışmaz.
+  - "Yakında kayıtlı şerit yok": o yolda henüz hiç düzgün sürmedin
+    (ör. yeni ışınlandın). "Yola çek"i kullan.
   - Kayıt dosyası: ...\bin\win_x64\plugins\spfPlugins\KonvoyTP\logs
-    ("konvoy bağlantısı doğrulandı" satırı konvoy bağlantısının
-    çalıştığını gösterir.)
+    ("konvoy bağlantısı doğrulandı" satırı konvoy bağlantısının,
+    "kaza algılandı" satırı kaza algılamanın çalıştığını gösterir.)
 
 KALDIRMA
   Oyun kapalıyken KALDIR.bat'a çift tıkla. Kayıtlı yerlerin masaüstüne
