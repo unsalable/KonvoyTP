@@ -86,15 +86,30 @@ static int Con_ExecEx(const char* c, char* err, int n) {
 }
 static void Log(SPF_Logger_Handle*, SPF_LogLevel, const char* m) { std::cout << "    log: " << m << "\n"; }
 
-// fake chat: sending echoes locally (like the game does) and records the broadcast
+// fake chat manager with the game's layout: +8 -> local player, player +0x48 = our convoy id (0xFFFF while joining)
+alignas(16) static uint8_t g_fakePlayer[0x60];
+alignas(16) static uint8_t g_fakeCm[0x40];
+static void SetChatId(uint16_t id) { memcpy(g_fakePlayer + 0x48, &id, 2); }
+static int g_badType = 0;  // lines sent with anything but "typed chat" (type 0, broadcast 1)
+
+// fake chat: sending echoes locally with the id the game would use, and records the broadcast
 static void FakeShow(void*, uint64_t, const char** pp, uint64_t) { g_shown.push_back(*pp); }
-static void FakeInput(void* cm, const char** pp, uint64_t type, uint64_t) {
+static void FakeInput(void* cm, const char** pp, uint64_t type, uint64_t broadcast) {
   g_sent.push_back(*pp);
-  Detour_AddToChat(cm, g_myId, pp, type);
+  if (type != 0 || broadcast != 1) ++g_badType;
+  uint16_t id = 0xFFFF;
+  memcpy(&id, g_fakePlayer + 0x48, 2);
+  Detour_AddToChat(cm, id, pp, type);
 }
 static void Incoming(uint16_t sender, const std::string& text) {
   const char* p = text.c_str();
-  Detour_AddToChat((void*)0x1, sender, &p, 1);
+  Detour_AddToChat(g_fakeCm, sender, &p, 0);
+}
+static int CountSent(const std::string& prefix) {
+  int n = 0;
+  for (auto& s : g_sent)
+    if (s.rfind(prefix, 0) == 0) ++n;
+  return n;
 }
 static void Tick(double dt = 0.1) {
   g_testNow += dt;
@@ -133,7 +148,10 @@ int main() {
   g.tel = (SPF_Telemetry_Handle*)0x1;
   g.iid = "me000001";
   g.autoName = "Melik";
-  g.capturedChat = (void*)0x1;  // ChatManager() falls back to this when the global is not set
+  void* playerPtr = g_fakePlayer;
+  memcpy(g_fakeCm + 8, &playerPtr, sizeof(playerPtr));
+  SetChatId(0xFFFF);              // still joining the convoy
+  g.capturedChat = g_fakeCm;      // ChatManager() falls back to this when the global is not set
   g.o_ChatInput = FakeInput;
   g.o_AddToChat = FakeShow;
 
@@ -143,13 +161,22 @@ int main() {
   Incoming(5, "#KTP1 Q peer0001");
   CHECK(g_shown.size() == 1, "protocol line must not be displayed");
 
-  std::cout << "2) joining a convoy: auto query, own echo verifies the link\n";
+  std::cout << "2) joining a convoy: waits for the player id, auto query, own echo verifies the link\n";
   g_truck.position = {1000.0, 10.0, 5000.0};
   g_truck.orientation.heading = 0.0;  // facing north (-Z)
-  for (int i = 0; i < 60; ++i) Tick(0.1);
-  CHECK(SentStartsWith("#KTP1 Q me000001"), "query sent after joining");
+  for (int i = 0; i < 100; ++i) Tick(0.1);  // 10 s while the game has not given us an id yet
+  CHECK(g_sent.empty(), "nothing is sent while joining (the others' games would drop it)");
+  SetChatId(g_myId);
+  for (int i = 0; i < 40; ++i) Tick(0.1);
+  CHECK(SentStartsWith("#KTP1 Q me000001"), "query sent once the player id is known");
   CHECK(g.localId == g_myId, "local player id learned from own echo");
   CHECK(SentStartsWith("#KTP1 P me000001"), "presence sent (reply to the queued Q)");
+  CHECK(g_badType == 0, "lines go out exactly like typed chat (type 0, broadcast)");
+
+  std::cout << "2b) nobody answered yet: it keeps asking by itself\n";
+  int q0 = CountSent("#KTP1 Q me000001");
+  for (int i = 0; i < 100; ++i) Tick(0.1);  // 10 s
+  CHECK(CountSent("#KTP1 Q me000001") > q0, "asked again while the friend list is empty");
 
   std::cout << "3) driving builds a trail: behind point and rewind\n";
   g_speed = 10.0f;
@@ -224,6 +251,7 @@ int main() {
   g.peers.erase("host0001");
   RunUntilIdle();  // drain echoes still queued from earlier steps
   g_myId = 1;      // from now on our own echo says: player id 1 = session host
+  SetChatId(1);
   g.localId = 1;
   g_truck.position = {0.0, 0.0, 0.0};
   g.trail.clear();
@@ -467,6 +495,63 @@ int main() {
   CHECK(g_testNow - g.crashT < 1.0, "slide detected as a crash");
   g_vel = SPF_FVector{};
   g_speed = 0.0f;
+
+  std::cout << "22) updater: versions, GitHub release JSON, SHA-256\n";
+  CHECK(ktpup::CompareVersions("v1.3.0", "1.2.9") > 0 && ktpup::CompareVersions("1.3", "1.3.0.0") == 0 && ktpup::CompareVersions("1.2.10", "1.2.9") > 0,
+        "version compare");
+  CHECK(ktpup::CleanVersion("v1.4.2") == "1.4.2", "tag to version");
+  {
+    const char* json = R"({"tag_name":"v9.8.7","draft":false,"name":"KonvoyTP ç \"x\"","assets":[
+        {"name":"KonvoyTP.dll","size":391168,"digest":"sha256:ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdef0123456789",
+         "browser_download_url":"https://github.com/unsalable/KonvoyTP/releases/download/v9.8.7/KonvoyTP.dll"},
+        {"name":"KonvoyTP_Kurulum.exe","size":17336832,"digest":null,"browser_download_url":"https://github.com/x/y.exe"},
+        {"name":"evil","size":1,"digest":"sha256:00","browser_download_url":"http://insecure.example/evil"}]})";
+    ktpup::Release rel;
+    bool ok = ktpup::ParseRelease(json, rel);
+    CHECK(ok && rel.tag == "v9.8.7", "release tag parsed");
+    const ktpup::Asset* dll = rel.Find("KonvoyTP.dll");
+    CHECK(dll && dll->size == 391168 && dll->sha256 == "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", "asset size + digest (lowercased)");
+    const ktpup::Asset* app = rel.Find("KonvoyTP_Kurulum.exe");
+    CHECK(app && app->sha256.empty(), "asset without digest has no hash");
+    CHECK(!rel.Find("evil"), "non-https download urls are ignored");
+    std::string data, err;
+    CHECK(app && !ktpup::DownloadAsset(*app, data, err) && !err.empty(), "files without a digest are never downloaded");
+    ktpup::Release draft;
+    CHECK(!ktpup::ParseRelease(R"({"tag_name":"v1","draft":true,"assets":[]})", draft), "draft releases are ignored");
+    ktpup::JVal v;
+    CHECK(!ktpup::ParseJson("{\"a\": [1, 2,]}", v) && !ktpup::ParseJson("{\"a\": 1} x", v), "broken JSON is rejected");
+  }
+  CHECK(ktpup::Sha256Hex("abc", 3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 of 'abc'");
+  {
+    std::string notPe = "MZ";
+    notPe.resize(0x400, '\0');
+    CHECK(!ktpup::LooksLikePe64(notPe) && !ktpup::LooksLikePe64("hello"), "non-PE files are rejected");
+    std::string self;
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    CHECK(ktpup::ReadFileAll(exe, self) && ktpup::LooksLikePe64(self), "a real x64 exe is accepted");
+  }
+
+  // Live check against GitHub (only when asked: set KTP_CANLI=1). Installs the latest release's KonvoyTP.dll over a
+  // dummy file in a temp folder, exactly like the plugin does at game start.
+  if (GetEnvironmentVariableA("KTP_CANLI", nullptr, 0) > 0) {
+    std::cout << "23) live: the plugin's self-update against GitHub\n";
+    wchar_t tmp[MAX_PATH];
+    GetTempPathW(MAX_PATH, tmp);
+    std::wstring dir = std::wstring(tmp) + L"ktp_selfupdate_test";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    ktpup::WriteFileAll(dir + L"\\KonvoyTP.dll", "eski");
+    volatile LONG cancel = 0;
+    RunUpdateCheck(dir, "0.0.1", &cancel);
+    std::cout << "    durum: " << UpdateState() << "\n";
+    std::string got;
+    CHECK(ktpup::ReadFileAll(dir + L"\\KonvoyTP.dll", got) && ktpup::LooksLikePe64(got) && got.find("SPF_GetPlugin") != std::string::npos,
+          "new KonvoyTP.dll installed in place of the old one");
+    std::string old;
+    CHECK(ktpup::ReadFileAll(dir + L"\\KonvoyTP.dll.eski", old) && old == "eski", "previous DLL kept as KonvoyTP.dll.eski");
+    RunUpdateCheck(dir, "999.0.0", &cancel);
+    CHECK(UpdateState() == "güncel", "nothing to do when already newest");
+  }
 
   std::cout << "\n" << g_pass << " passed, " << g_fail << " failed\n";
   return g_fail == 0 ? 0 : 1;

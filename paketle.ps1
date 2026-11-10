@@ -1,9 +1,10 @@
-# Arkadaslara verilecek kurulum paketini olusturur: dist\KonvoyTP_Kurulum (+ .zip)
-# SPF-Framework yoksa resmi GitHub surumunden (v1.2.7, Apache-2.0) indirilir.
+# Yayin dosyalarini olusturur (dist\):
+#   KonvoyTP_Kurulum.exe  -> insanlarin indirdigi tek dosya (mod + SPF Framework icinde; kur / guncelle / kaldir)
+#   KonvoyTP.dll          -> oyun acilisinda modun kendini guncellemesi icin
+#   KonvoyTP_Kurulum.zip  -> eski indirme linkleri bozulmasin diye: icinde KonvoyTP_Kurulum.exe + OKU_BENI.txt
+# SPF-Framework yoksa resmi GitHub surumunden (v1.2.7, Apache-2.0) indirilir ve SHA256 ile dogrulanir.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$dll = Join-Path $root 'build\out\KonvoyTP\KonvoyTP.dll'
-if (-not (Test-Path $dll)) { throw "Once build.bat ile derle: $dll yok" }
 
 # --- SPF-Framework 1.2.7 (resmi surum) ---
 $spf = Join-Path $root 'third_party\SPF-Framework-1.2.7'
@@ -23,23 +24,26 @@ if (-not (Test-Path $spfDll)) {
   Remove-Item -Recurse -Force $tmp
 }
 if ((Get-FileHash $spfDll -Algorithm SHA256).Hash -ne $spfSha) { throw "spf-framework.dll beklenen SPF 1.2.7 dosyasi degil (SHA256 uyusmuyor)." }
-Copy-Item (Join-Path $root 'SPF_API\LICENSE-SPF-Framework.txt') (Join-Path $spf 'LICENSE-SPF-Framework.txt') -Force
 
-# --- paket ---
-$dist = Join-Path $root 'dist\KonvoyTP_Kurulum'
+# --- derle (SPF bulundugu icin uygulamanin icine gomulur) ---
+& cmd /c (Join-Path $root 'build.bat')
+if ($LASTEXITCODE -ne 0) { throw "Derleme basarisiz." }
+$app = Join-Path $root 'build\out\app\KonvoyTP_Kurulum.exe'
+$dll = Join-Path $root 'build\out\KonvoyTP\KonvoyTP.dll'
+if ((Get-Item $app).Length -lt 10MB) { throw "Uygulamanin icinde SPF Framework yok gibi (dosya cok kucuk)." }
+
+# --- dist ---
+$dist = Join-Path $root 'dist'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
-$files = Join-Path $dist 'dosyalar'
-New-Item -ItemType Directory -Force -Path (Join-Path $files 'KonvoyTP') | Out-Null
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+Copy-Item $app (Join-Path $dist 'KonvoyTP_Kurulum.exe')
+Copy-Item $dll (Join-Path $dist 'KonvoyTP.dll')
+$z = Join-Path $dist 'zip\KonvoyTP_Kurulum'
+New-Item -ItemType Directory -Force -Path $z | Out-Null
+Copy-Item $app (Join-Path $z 'KonvoyTP_Kurulum.exe')
+Copy-Item (Join-Path $root 'OKU_BENI.txt') $z
+Compress-Archive -Path $z -DestinationPath (Join-Path $dist 'KonvoyTP_Kurulum.zip')
+Remove-Item -Recurse -Force (Join-Path $dist 'zip')
 
-Copy-Item (Join-Path $root 'installer\KUR.bat') $dist
-Copy-Item (Join-Path $root 'installer\KALDIR.bat') $dist
-Copy-Item (Join-Path $root 'OKU_BENI.txt') $dist
-Copy-Item (Join-Path $root 'installer\kur.ps1') $files
-Copy-Item $dll (Join-Path $files 'KonvoyTP')
-Copy-Item -Recurse (Join-Path $root 'localization') (Join-Path $files 'KonvoyTP\localization')
-Copy-Item -Recurse $spf (Join-Path $files 'SPF')
-
-$zip = Join-Path $root 'dist\KonvoyTP_Kurulum.zip'
-if (Test-Path $zip) { Remove-Item -Force $zip }
-Compress-Archive -Path $dist -DestinationPath $zip
-Write-Host "Paket hazir: $zip" -ForegroundColor Green
+Get-ChildItem $dist | ForEach-Object { "{0,-24} {1,12:N0} bayt  {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName -Algorithm SHA256).Hash.Substring(0, 16) }
+Write-Host "Paket hazir: $dist" -ForegroundColor Green

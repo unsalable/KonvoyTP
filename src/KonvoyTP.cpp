@@ -2,8 +2,9 @@
 //  KonvoyTP - ETS2 Konvoy Isinlanma eklentisi (SPF-Framework plugin)
 //
 //  * Konvoydaki arkadasinin yanina isinlan, onu yanina cek (yonetici), herkesi topla.
-//  * Devrilen / sikisan kamyonu duzelt, U donusu yap, "geri sar" ile yola don,
+//  * Yola cek, kendi seridine gec, devrilen kamyonu duzelt, "geri sar" ile yola don,
 //    son isinlanmayi geri al.
+//  * Oyun acilisinda GitHub'daki yeni surumu kendisi indirir (bir sonraki acilista calisir).
 //  * Kayitli yerlere ve koordinatlara isinlan.
 //  (Sehir merkezine dogrudan isinlanma bilerek YOK: oyunda yola oturtan bir fonksiyon yok,
 //   test edildiginde kamyon bina/havada kaliyordu.)
@@ -34,6 +35,9 @@
 #include <string>
 #include <vector>
 
+#include "ktp_update.h"
+
+#include <SPF_Environment_API.h>
 #include <SPF_Plugin.h>
 #include <SPF_Config_API.h>
 #include <SPF_Formatting_API.h>
@@ -49,9 +53,14 @@
 namespace KonvoyTP {
 
 // -------------------------------------------------------------------------------------
-// Game function types (ETS2 1.62, verified by disassembly)
+// Game function types (ETS2 1.62.1, verified by disassembly)
 //   AddToChat  : (chat_manager, uint16 sender_id, const char** text, uint8 type)   -> shows a line
+//                (local echo of our own lines and every line received from the network)
 //   ChatInput  : (chat_manager, const char** text, uint8 type, bool broadcast)     -> sends a line
+//                The game's own chat box calls it with type 0 + broadcast 1 (system notes: type 4,
+//                "/commands": type 1). Our lines go out exactly like a typed chat line: type 0.
+//   chat_manager = *(*(game global) + 0x2A0); our player id = *(uint16*)(*(chat_manager + 8) + 0x48)
+//   (0xFFFF while joining: other players' games drop lines whose sender id is not the real one).
 // -------------------------------------------------------------------------------------
 using AddToChat_t = void (*)(void* chat_manager, uint64_t sender_id, const char** pp_text, uint64_t message_type);
 using ChatInput_t = void (*)(void* chat_manager, const char** pp_text, uint64_t message_type, uint64_t should_broadcast);
@@ -195,6 +204,17 @@ struct Ctx {
   bool wasVisible = false;
   double toggleAt = -1.0;     // menu key pressed while Shift was down (maybe the Shift+F8 chord)
   double roadKeyAt = -100.0;  // last "Yola çek" hotkey
+
+  // convoy link: readiness, automatic re-asking and counters shown in the diagnostics
+  int chatId = -1;          // our player id as the game puts it into outgoing chat (-1: not known yet)
+  double readySince = -1;   // since when we can send lines the other players' games will accept
+  double nextQueryAt = -1;  // next automatic "who is here?" while nobody has answered yet
+  int sentCount = 0, echoCount = 0, otherCount = 0;  // our lines sent / seen back / lines from others
+  volatile LONG chatLines = 0, protoLines = 0;        // every chat line / our protocol lines seen by the hook
+  SPF_Environment_Handle* env = nullptr;
+  char mpStatus[32] = "";
+  double mpCheckedAt = -100;
+  bool autoUpdate = true;
 
   // our own toast notifications (drawn by a separate, non-interactive overlay window)
   struct Toast {
@@ -420,11 +440,13 @@ static void* ChatManager() {
 }
 
 static void Detour_AddToChat(void* cm, uint64_t sender, const char** pp, uint64_t type) {
+  InterlockedIncrement(&g.chatLines);
   void* text = nullptr;
   if (pp && SafeReadPtr(pp, &text) && text) {
     char buf[256];
     int n = SafeCopyStr((const char*)text, buf, (int)sizeof(buf));
     if (n >= (int)kProtoLen && memcmp(buf, kProto, kProtoLen) == 0) {
+      InterlockedIncrement(&g.protoLines);
       {
         std::lock_guard<std::mutex> lk(g.inMutex);
         if (g.inbox.size() < 256) g.inbox.push_back({(uint16_t)(sender & 0xFFFF), std::string(buf, (size_t)n)});
@@ -440,13 +462,39 @@ static void Detour_ChatInput(void* cm, const char** pp, uint64_t type, uint64_t 
   if (g.o_ChatInput) g.o_ChatInput(cm, pp, type, broadcast);
 }
 
-static bool InConvoy() { return ChatManager() != nullptr && g.o_ChatInput != nullptr; }
+static bool SafeReadU16(const void* addr, uint16_t* out) {
+  __try {
+    *out = *(const uint16_t*)addr;
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+// Our player id exactly as the game writes it into outgoing chat lines (see the notes at the top).
+static int LocalChatId(void* cm) {
+  if (!cm) return -1;
+  void* player = nullptr;
+  uint16_t id = 0xFFFF;
+  if (!SafeReadPtr((const char*)cm + 8, &player) || !player) return -1;
+  if (!SafeReadU16((const char*)player + 0x48, &id) || id == 0xFFFF) return -1;
+  return id;
+}
+
+static bool IsTruckersMP() { return strcmp(g.mpStatus, "TruckersMP") == 0; }
+
+static bool InConvoy() { return ChatManager() != nullptr && g.o_ChatInput != nullptr && !IsTruckersMP(); }
+
+// our convoy player id: confirmed by our own echoed line, else as read from the game (1 = host)
+static int MyId() { return g.localId >= 0 ? g.localId : g.chatId; }
 
 static bool SendNow(const std::string& line) {
   void* cm = ChatManager();
   if (!cm || !g.o_ChatInput || line.size() >= 199) return false;
   const char* p = line.c_str();
-  g.o_ChatInput(cm, &p, 1, 1);  // type 1 = normal player message, broadcast to the session
+  g.o_ChatInput(cm, &p, 0, 1);  // type 0 + broadcast: exactly what the game's chat box sends
+  ++g.sentCount;
+  if (g.sentCount <= 60) Logf(SPF_LOG_INFO, "giden: %.40s (oyuncu kimliği %d)", line.c_str() + kProtoLen, g.chatId);
   return true;
 }
 
@@ -478,7 +526,7 @@ static uint32_t MyFlags() {
   uint32_t f = 0;
   if (g.pullPolicy == PULL_ALL) f |= 1;
   if (g.pullPolicy == PULL_HOST) f |= 2;
-  if (g.localId == 1) f |= 4;
+  if (MyId() == 1) f |= 4;
   if (g.me.valid) f |= 8;
   return f;
 }
@@ -719,6 +767,7 @@ static void LoadSettings() {
   g.pullPolicy = (int)c->Cfg_GetInt32(g.cfg, "settings.pull_policy", PULL_HOST);
   if (g.pullPolicy < 0 || g.pullPolicy > 2) g.pullPolicy = PULL_HOST;
   g.restoreDev = c->Cfg_GetBool(g.cfg, "settings.restore_dev", true);
+  g.autoUpdate = c->Cfg_GetBool(g.cfg, "settings.auto_update", true);
   g.headingSign = (int)c->Cfg_GetInt32(g.cfg, "settings.heading_sign", 0);
   if (g.headingSign != 1 && g.headingSign != -1) g.headingSign = 0;
 }
@@ -732,11 +781,12 @@ static void SaveSettings() {
   if (!c || !g.cfg) return;
   const std::string name = g.nameBuf;
   const int policy = g.pullPolicy, sign = g.headingSign;
-  const bool restore = g.restoreDev;
+  const bool restore = g.restoreDev, autoUpd = g.autoUpdate;
   g_savingSettings = true;
   c->Cfg_SetString(g.cfg, "settings.name", name.c_str());
   c->Cfg_SetInt32(g.cfg, "settings.pull_policy", policy);
   c->Cfg_SetBool(g.cfg, "settings.restore_dev", restore);
+  c->Cfg_SetBool(g.cfg, "settings.auto_update", autoUpd);
   c->Cfg_SetInt32(g.cfg, "settings.heading_sign", sign);
   c->Cfg_Save(g.cfg);
   g_savingSettings = false;
@@ -750,6 +800,154 @@ static std::wstring DllDir() {
   std::wstring p(path);
   size_t s = p.find_last_of(L"\\/");
   return s == std::wstring::npos ? std::wstring(L".") : p.substr(0, s);
+}
+
+// =====================================================================================
+// Self-update. Once per game start a background thread asks GitHub for the latest release. A newer
+// KonvoyTP.dll is downloaded and checked (size + SHA-256 reported by GitHub, x64 PE), then put in place:
+// the running DLL is renamed to KonvoyTP.dll.eski (Windows allows renaming a loaded DLL) and the new file
+// takes its name, so the next game start runs the new version. The thread only touches files and its own
+// state (never SPF), and holds a reference on this DLL so it can finish safely even if the game exits.
+// =====================================================================================
+// Window titles / key names for SPF, written by the DLL itself so a DLL-only update keeps them current.
+static const char kLocalizationJson[] = R"json({
+    "MainWindow": {
+        "title": "Konvoy Işınlanma",
+        "desc": "Arkadaşına ışınlan, yanına çek, kamyonu kurtar."
+    },
+    "Toast": {
+        "title": "Konvoy Işınlanma bildirimleri",
+        "desc": "Işınlanma sonrası çıkan kısa bildirimler."
+    },
+    "keybinds": {
+        "toggle": {
+            "title": "Konvoy Işınlanma menüsü",
+            "desc": "Menüyü açar / kapatır."
+        },
+        "road": {
+            "title": "Yola çek",
+            "desc": "Yoldan çıktıysan menüyü açmadan seni yola geri koyar."
+        }
+    }
+}
+)json";
+
+static void RefreshOwnFiles() {
+  std::wstring dir = DllDir();
+  DeleteFileW((dir + L"\\KonvoyTP.dll.eski").c_str());  // left over from the previous self-update
+  DeleteFileW((dir + L"\\KonvoyTP.dll.yeni").c_str());
+  CreateDirectoryW((dir + L"\\localization").c_str(), nullptr);
+  for (const wchar_t* lang : {L"tr", L"en"}) {
+    std::wstring f = dir + L"\\localization\\" + lang + L".json";
+    std::string cur;
+    if (!ktpup::ReadFileAll(f, cur) || cur != kLocalizationJson) ktpup::WriteFileAll(f, kLocalizationJson);
+  }
+}
+
+struct UpdaterState {
+  std::mutex m;
+  std::string state = "kontrol edilmedi";
+  std::string notice;  // one-time message for the game thread
+  int noticeKind = 0;
+  volatile LONG cancel = 0;
+  bool started = false;
+  std::wstring dir;
+  std::string version;
+};
+static UpdaterState g_upd;
+static HMODULE g_updModule = nullptr;
+
+static std::string UpdateState() {
+  std::lock_guard<std::mutex> lk(g_upd.m);
+  return g_upd.state;
+}
+
+static void UpdSet(const std::string& state, const std::string& notice = std::string(), int kind = 0) {
+  std::lock_guard<std::mutex> lk(g_upd.m);
+  g_upd.state = state;
+  if (!notice.empty()) {
+    g_upd.notice = notice;
+    g_upd.noticeKind = kind;
+  }
+}
+
+// Installs `data` as the plugin DLL in `dir`. Returns false (and leaves the current DLL untouched) on any problem.
+static bool ReplacePluginDll(const std::wstring& dir, const std::string& data) {
+  std::wstring dll = dir + L"\\KonvoyTP.dll", fresh = dll + L".yeni", old = dll + L".eski";
+  if (!ktpup::WriteFileAll(fresh, data)) return false;
+  DeleteFileW(old.c_str());
+  if (!MoveFileExW(dll.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+    DeleteFileW(fresh.c_str());
+    return false;
+  }
+  if (!MoveFileExW(fresh.c_str(), dll.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+    MoveFileExW(old.c_str(), dll.c_str(), MOVEFILE_REPLACE_EXISTING);
+    DeleteFileW(fresh.c_str());
+    return false;
+  }
+  return true;
+}
+
+static void RunUpdateCheck(const std::wstring& dir, const std::string& curVersion, volatile LONG* cancel) {
+  UpdSet("kontrol ediliyor…");
+  ktpup::Release rel;
+  std::string err;
+  if (!ktpup::FetchLatest(rel, err, cancel)) {
+    UpdSet("kontrol edilemedi (" + err + ")");
+    return;
+  }
+  std::string latest = ktpup::CleanVersion(rel.tag);
+  if (ktpup::CompareVersions(latest, curVersion) <= 0) {
+    UpdSet("güncel");
+    return;
+  }
+  const ktpup::Asset* a = rel.Find(ktpup::kAssetDll);
+  if (!a) {
+    UpdSet(latest + " çıktı; KonvoyTP uygulamasını açınca güncellenir", "KonvoyTP " + latest + " çıktı. Oyunu kapatıp KonvoyTP uygulamasını aç, kendisi günceller.", 0);
+    return;
+  }
+  UpdSet(latest + " indiriliyor…");
+  std::string data;
+  if (!ktpup::DownloadAsset(*a, data, err, cancel)) {
+    UpdSet(latest + " indirilemedi (" + err + ")");
+    return;
+  }
+  if (!ktpup::LooksLikePe64(data) || data.find("SPF_GetPlugin") == std::string::npos) {
+    UpdSet(latest + " indirildi ama dosya geçersiz, kurulmadı");
+    return;
+  }
+  if (!ReplacePluginDll(dir, data)) {
+    UpdSet(latest + " kurulamadı (dosya değiştirilemedi)");
+    return;
+  }
+  UpdSet(latest + " hazır · oyunu yeniden açınca çalışır",
+         "KonvoyTP " + latest + " indirildi. Oyunu bir dahaki açışında yeni sürüm çalışacak.", 1);
+}
+
+static DWORD WINAPI UpdateThreadMain(LPVOID) {
+  for (int i = 0; i < 250 && !g_upd.cancel; ++i) Sleep(100);  // let the game finish loading first
+  if (!g_upd.cancel) RunUpdateCheck(g_upd.dir, g_upd.version, &g_upd.cancel);
+  FreeLibraryAndExitThread(g_updModule, 0);
+}
+
+static void StartUpdater() {
+#ifndef KTP_TEST
+  if (g_upd.started) return;
+  HMODULE self = nullptr;
+  // +1 reference: this DLL stays mapped until the thread has finished, whatever SPF does meanwhile
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)&StartUpdater, &self) || !self) return;
+  g_updModule = self;
+  g_upd.dir = DllDir();
+  g_upd.version = PLUGIN_VERSION;
+  InterlockedExchange(&g_upd.cancel, 0);
+  HANDLE h = CreateThread(nullptr, 0, UpdateThreadMain, nullptr, 0, nullptr);
+  if (!h) {
+    FreeLibrary(self);
+    return;
+  }
+  CloseHandle(h);
+  g_upd.started = true;
+#endif
 }
 
 static void LoadPlaces() {
@@ -963,7 +1161,7 @@ static void ProcessJob() {
 // =====================================================================================
 static bool CanPull(const Peer& p) {
   if (p.flags & 1) return true;                       // accepts everyone
-  if ((p.flags & 2) && g.localId == 1) return true;   // accepts host and I am the host
+  if ((p.flags & 2) && MyId() == 1) return true;      // accepts host and I am the host
   return false;
 }
 
@@ -1155,10 +1353,13 @@ static void HandleMsg(uint16_t sender, const std::string& text) {
   const std::string& kind = t[1];
   const std::string& from = t[2];
   if (from == g.iid) {  // our own line echoed back locally -> transport works, learn our player id
+    ++g.echoCount;
+    if (sender == 0xFFFF) return;  // sent while still joining; the next line will carry the real id
     if (g.localId != (int)sender) Logf(SPF_LOG_INFO, "konvoy bağlantısı doğrulandı (oyuncu kimliği %u%s)", sender, sender == 1 ? ", host" : "");
     g.localId = sender;
     return;
   }
+  ++g.otherCount;
   Logf(SPF_LOG_INFO, "gelen: %c from=%s sender=%u", kind.empty() ? '?' : kind[0], from.c_str(), sender);
   double now = Now();
 
@@ -1439,14 +1640,17 @@ static void Header(SPF_UI_API* ui) {
     s = "Arkadaşının konumu bekleniyor…";
   } else if (!g.me.valid) {
     s = "Kamyona geçmen bekleniyor";
+  } else if (IsTruckersMP()) {
+    dot = T::kRed;
+    s = "TruckersMP'de konvoy özellikleri kapalı";
   } else if (!inConvoy) {
     s = "Tek başına · konvoy yok";
   } else if (g.localId >= 0) {
     dot = T::kGreen;
     s = g.localId == 1 ? "Konvoyda · bağlantı tamam · Host" : "Konvoyda · bağlantı tamam";
-  } else if (g.chatSince >= 0 && Now() - g.chatSince < 15.0) {
+  } else if (g.chatId < 0 || (g.chatSince >= 0 && Now() - g.chatSince < 40.0)) {
     dot = T::kYellow;
-    s = "Konvoyda · bağlantı kontrol ediliyor…";
+    s = g.chatId < 0 ? "Konvoya bağlanıyor…" : "Konvoyda · bağlantı kontrol ediliyor…";
   } else {
     dot = T::kRed;
     s = "Konvoy sohbetine ulaşılamadı";
@@ -1484,7 +1688,11 @@ static void RenderConvoyTab(SPF_UI_API* ui) {
   std::sort(list.begin(), list.end(), [](const Peer* a, const Peer* b) { return a->name < b->name; });
 
   if (list.empty()) {
-    EmptyState(ui, ICON_FA_USER_GROUP, "Henüz kimse görünmüyor", "Arkadaşlarında da KonvoyTP kurulu olmalı.");
+    EmptyState(ui, ICON_FA_USER_GROUP, "Henüz kimse görünmüyor", "Arkadaşında da KonvoyTP kurulu olmalı; otomatik aranıyor.");
+    // what the link is doing, so a problem can be told apart from "nobody has the mod"
+    Caption(ui, Fmt("Bağlantı: %d gönderildi · %d geri geldi · %d arkadaştan geldi · kimliğin %s", g.sentCount, g.echoCount, g.otherCount,
+                    MyId() >= 0 ? std::to_string(MyId()).c_str() : "?")
+                    .c_str());
   } else {
     Cursor(ui, x, y);
     SPF_DrawList_Handle dl = ui->UI_GetWindowDrawList();
@@ -1535,7 +1743,7 @@ static void RenderConvoyTab(SPF_UI_API* ui) {
     if (Btn(ui, ICON_FA_PEOPLE_GROUP "  Herkesi yanıma topla", BTN_PRIMARY, T::kW, 40.0f)) ActionBringAll();
     ui->UI_EndDisabled();
   }
-  Caption(ui, g.localId == 1 ? "Konvoyun sahibisin: izin veren herkesi yanına çekebilirsin."
+  Caption(ui, MyId() == 1 ? "Konvoyun sahibisin: izin veren herkesi yanına çekebilirsin."
                              : "\"Git\" ile yanına gidersin. \"Getir\" sadece izin verenlerde çıkar.");
 }
 
@@ -1713,6 +1921,13 @@ static void RenderSettingsTab(SPF_UI_API* ui) {
   ui->UI_DrawList_AddText(dl, x + 14.0f, y + (h - lh) * 0.5f, U32(T::kText), "Işınlanınca geliştirici modunu kapat");
   if (Toggle(ui, "##ktp_dev", &g.restoreDev, x + T::kW - 12.0f - 46.0f, y + (h - 28.0f) * 0.5f)) SaveSettings();
   y += h;
+  RowBg(ui, x, y, T::kW, h, false, false, T::kCell);
+  ui->UI_DrawList_AddText(dl, x + 14.0f, y + (h - lh) * 0.5f, U32(T::kText), "Yeni sürümü otomatik indir");
+  if (Toggle(ui, "##ktp_upd", &g.autoUpdate, x + T::kW - 12.0f - 46.0f, y + (h - 28.0f) * 0.5f)) {
+    SaveSettings();
+    if (g.autoUpdate) StartUpdater();
+  }
+  y += h;
   // key binding rows: label, current key, "Değiştir"
   struct KeyRow {
     const char* label;
@@ -1743,8 +1958,14 @@ static void RenderSettingsTab(SPF_UI_API* ui) {
     const SPF_GameConsole_API* con = g.core ? g.core->console : nullptr;
     PushCol(ui, SPF_COLOR_TEXT, T::kText2);
     ui->UI_Text(Fmt("Sohbet kancaları: gelen %s, giden %s", g.o_AddToChat ? "tamam" : "YOK", g.o_ChatInput ? "tamam" : "YOK").c_str());
-    ui->UI_Text(Fmt("Konvoy sohbeti: %s  (adres %s, ofset 0x%X)", ChatManager() ? "var" : "yok", g.ppGlobal ? "bulundu" : "YOK", g.chatOffset).c_str());
-    ui->UI_Text(Fmt("Oyuncu kimliği: %d   Eklenti kimliği: %s", g.localId, g.iid.c_str()).c_str());
+    ui->UI_Text(Fmt("Konvoy sohbeti: %s  (adres %s, ofset 0x%X)  durum: %s", ChatManager() ? "var" : "yok", g.ppGlobal ? "bulundu" : "YOK", g.chatOffset,
+                    g.mpStatus[0] ? g.mpStatus : "-")
+                    .c_str());
+    ui->UI_Text(Fmt("Oyuncu kimliği: %d (oyundan %d)   Eklenti kimliği: %s", g.localId, g.chatId, g.iid.c_str()).c_str());
+    ui->UI_Text(Fmt("Mesajlar: %d gönderildi, %d geri geldi, %d arkadaştan; sohbet satırı %ld (bizim %ld)", g.sentCount, g.echoCount, g.otherCount,
+                    (long)g.chatLines, (long)g.protoLines)
+                    .c_str());
+    ui->UI_Text(Fmt("Sürüm %s · güncelleme: %s", PLUGIN_VERSION, UpdateState().c_str()).c_str());
     ui->UI_Text(Fmt("Geliştirici modu: %s   Yön ayarı: %s", (con && con->GCon_IsCheatsEnabled && con->GCon_IsCheatsEnabled()) ? "açık" : "kapalı",
                     g.headingSign == 1 ? "doğrulandı" : (g.headingSign == -1 ? "ters" : "test edilmedi"))
                     .c_str());
@@ -1853,10 +2074,11 @@ static void BuildManifest(SPF_Manifest_Builder_Handle* h, const SPF_Manifest_Bui
   api->Policy_AddRequiredHook(h, "PrismArrayResolver");
 
   // All settings are edited from the plugin's own "Ayarlar" tab, so they are hidden in the SPF settings window.
-  api->Settings_SetJson(h, R"json({ "name": "", "pull_policy": 0, "restore_dev": true, "heading_sign": 0 })json");
+  api->Settings_SetJson(h, R"json({ "name": "", "pull_policy": 0, "restore_dev": true, "auto_update": true, "heading_sign": 0 })json");
   api->Meta_AddCustomSetting(h, "name", nullptr, nullptr, nullptr, nullptr, true);
   api->Meta_AddCustomSetting(h, "pull_policy", nullptr, nullptr, nullptr, nullptr, true);
   api->Meta_AddCustomSetting(h, "restore_dev", nullptr, nullptr, nullptr, nullptr, true);
+  api->Meta_AddCustomSetting(h, "auto_update", nullptr, nullptr, nullptr, nullptr, true);
   api->Meta_AddCustomSetting(h, "heading_sign", nullptr, nullptr, nullptr, nullptr, true);
 
   api->Defaults_SetLogging(h, "info", true);
@@ -1880,6 +2102,9 @@ static void OnLoad(const SPF_Load_API* load_api) {
   if (load_api->logger) g.log = load_api->logger->Log_GetContext(PLUGIN_NAME);
   if (load_api->config) g.cfg = load_api->config->Cfg_GetContext(PLUGIN_NAME);
   LoadSettings();
+#ifndef KTP_TEST
+  RefreshOwnFiles();
+#endif
 }
 
 static void OnActivated(const SPF_Core_API* core_api) {
@@ -1913,6 +2138,7 @@ static void OnActivated(const SPF_Core_API* core_api) {
     }
   }
   if (core_api->telemetry) g.tel = core_api->telemetry->Tel_GetContext(PLUGIN_NAME);
+  if (core_api->environment && core_api->environment->Env_GetContext) g.env = core_api->environment->Env_GetContext(PLUGIN_NAME);
 
   SPF_Hooks_API* hk = core_api->hooks;
   if (hk) {
@@ -1940,6 +2166,7 @@ static void OnActivated(const SPF_Core_API* core_api) {
          (void*)g.ppGlobal, g.chatOffset, g.loadCallSite ? "ok" : "yok");
   }
   Logf(SPF_LOG_INFO, "KonvoyTP %s hazır. ad=%s kimlik=%s yerler=%u", PLUGIN_VERSION, g.autoName.c_str(), g.iid.c_str(), (unsigned)g.places.size());
+  if (g.autoUpdate) StartUpdater();
 }
 
 static void OnRegisterUI(SPF_UI_API* ui_api) {
@@ -1971,21 +2198,54 @@ static void OnUpdate() {
     if (now - g.roadKeyAt > 0.6) ToggleMainWindow();
   }
 
+  // multiplayer status from SPF ("None" / "Convoy" / "TruckersMP"), refreshed every few seconds
+  if (now - g.mpCheckedAt > 3.0) {
+    g.mpCheckedAt = now;
+    if (g.env && g.core->environment && g.core->environment->Env_GetMultiplayerStatus) {
+      char st[32] = "";
+      g.core->environment->Env_GetMultiplayerStatus(g.env, st, (int)sizeof(st));
+      if (strcmp(st, g.mpStatus) != 0) Logf(SPF_LOG_INFO, "çok oyunculu durum: %s", st[0] ? st : "-");
+      memcpy(g.mpStatus, st, sizeof(st));
+    }
+  }
+
   // convoy session tracking
-  void* cm = ChatManager();
+  void* cm = IsTruckersMP() ? nullptr : ChatManager();
   if (cm != g.lastChat) {
     g.lastChat = cm;
     g.peers.clear();
     g.outbox.clear();
     g.localId = -1;
+    g.chatId = -1;
     g.announced = false;
+    g.readySince = -1;
+    g.nextQueryAt = -1;
+    g.sentCount = g.echoCount = g.otherCount = 0;
     g.gotoReq.active = false;
     g.chatSince = cm ? now : -1;
     if (cm) Logf(SPF_LOG_INFO, "konvoy sohbeti bulundu");
   }
-  if (cm && !g.announced && g.chatSince >= 0 && now - g.chatSince > 4.0 && g.o_ChatInput) {
+  // Talk only once the game has given us our convoy player id: lines sent before that carry id 0xFFFF and the
+  // other players' games throw them away (if the id cannot be read at all, fall back to a 30 s wait).
+  int cid = LocalChatId(cm);
+  if (cid != g.chatId) {
+    if (cid >= 0) Logf(SPF_LOG_INFO, "konvoy oyuncu kimliği: %d%s", cid, cid == 1 ? " (host)" : "");
+    g.chatId = cid;
+  }
+  bool ready = cm && g.o_ChatInput && (cid >= 0 || (g.chatSince >= 0 && now - g.chatSince > 30.0));
+  if (!ready)
+    g.readySince = -1;
+  else if (g.readySince < 0)
+    g.readySince = now;
+  if (ready && !g.announced && now - g.readySince > 2.0) {
     g.announced = true;
     SendQuery();  // learn who is around (also tells them about us)
+    g.nextQueryAt = now + 8.0;
+  }
+  // nobody has answered yet (a friend still loading, or joining later): ask again now and then
+  if (ready && g.announced && g.peers.empty() && g.nextQueryAt >= 0 && now >= g.nextQueryAt) {
+    SendQuery();
+    g.nextQueryAt = now + (now - g.readySince < 180.0 ? 8.0 : 40.0);
   }
 
   // inbound
@@ -2002,9 +2262,9 @@ static void OnUpdate() {
     SendPresence();
   }
 
-  // outbound (rate limited)
-  if (!g.outbox.empty() && now - g.lastSend >= 0.25) {
-    if (cm) SendNow(g.outbox.front());
+  // outbound (rate limited; waits while we are still joining)
+  if (!g.outbox.empty() && ready && now - g.lastSend >= 0.25) {
+    SendNow(g.outbox.front());
     g.outbox.pop_front();
     g.lastSend = now;
   }
@@ -2036,6 +2296,21 @@ static void OnUpdate() {
     bool vis = g.ui->UI_IsVisible(g.win);
     if (vis && !g.wasVisible && InConvoy() && now - g.lastQuery > 5.0) SendQuery();
     g.wasVisible = vis;
+  }
+
+  // a message from the update thread (shown once)
+  {
+    std::string note;
+    int kind = 0;
+    {
+      std::lock_guard<std::mutex> lk(g_upd.m);
+      note.swap(g_upd.notice);
+      kind = g_upd.noticeKind;
+    }
+    if (!note.empty()) {
+      Logf(SPF_LOG_INFO, "güncelleme: %s", note.c_str());
+      Notify(kind == 1 ? SPF_NOTIFICATION_SUCCESS : SPF_NOTIFICATION_INFO, note);
+    }
   }
 
   // toasts: drop expired ones; the overlay window is only visible while something is showing
@@ -2074,6 +2349,7 @@ static void OnSettingChanged(SPF_Config_Handle* /*h*/, const char* /*keyPath*/) 
 }
 
 static void OnUnload() {
+  InterlockedExchange(&g_upd.cancel, 1);  // the update thread stops at its next check
   // Trampolines are intentionally kept: if a detour is still reachable it must keep forwarding to the game.
   g.peers.clear();
   g.trail.clear();

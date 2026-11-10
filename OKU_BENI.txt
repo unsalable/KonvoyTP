@@ -1,131 +1,72 @@
 ﻿=====================================================================
-  KonvoyTP - ETS2 Konvoy Işınlanma Modu   (sürüm 1.2.0, ETS2 1.62)
+  KonvoyTP - ETS2 Konvoy Işınlanma Modu   (sürüm 1.3.0, ETS2 1.62)
 =====================================================================
 
-NE İŞE YARAR?
-  Kamyondayken F8'e bas; küçük, sade bir menü açılır (tekrar F8 ya da
-  sağ üstteki ✕ ile kapanır, boş bir yerinden tutup taşıyabilirsin).
-  Shift+F8: menüyü açmadan "Yola çek".
+KURULUM (herkes yapmalı: sen ve arkadaşların)
+  1) KonvoyTP_Kurulum.exe dosyasına çift tıkla.
+     Mavi "Windows bilgisayarınızı korudu" ekranı çıkarsa:
+     "Ek bilgi" > "Yine de çalıştır".
+  2) Açılan pencerede "Kur"a bas. Oyun klasörünü kendisi bulur,
+     SPF Framework yoksa onu da kurar. (Bulamazsa "Oyun klasörünü seç".)
+  3) "Oyunu aç"a bas, kamyona geç, F8'e bas.
+
+  Kurulumdan sonra masaüstünde "KonvoyTP" kısayolu olur.
+
+GÜNCELLEME: KENDİLİĞİNDEN
+  - KonvoyTP uygulamasını her açtığında yeni sürüm var mı bakar; varsa
+    kendini ve oyundaki modu günceller (oyun açıksa, oyun kapanınca).
+  - Oyun da her açılışta modun yeni sürümünü arka planda indirir; oyunu
+    bir sonraki açışında yeni sürüm çalışır.
+  - İndirilen her dosya GitHub'daki SHA-256 özetiyle doğrulanır.
+
+KALDIRMA
+  KonvoyTP uygulamasında "Kaldır" (ya da Windows Ayarlar > Uygulamalar >
+  KonvoyTP). Kayıtlı yerlerin masaüstüne yedeklenir. SPF Framework
+  yerinde kalır (başka modlar kullanabilir).
+
+OYUNDA
+  F8        menü (tekrar F8 ya da ✕ ile kapanır, boş yerinden taşınır)
+  Shift+F8  menüyü açmadan "Yola çek"
 
   Konvoy   Modu kurulu arkadaşların, uzaklıkları ile.
-           "Git"    -> arkadaşının ~25 m arkasına, yolun üstüne, onun
-                       baktığı yöne doğru ışınlanırsın.
+           "Git"    -> arkadaşının ~25 m arkasına, yolun üstüne ışınlanırsın.
            "Getir"  -> arkadaşını senin arkana çeker (izin verdiyse).
            "Herkesi yanıma topla" -> izin veren herkesi arkana dizer.
-  Kurtar   "Yola çek"  (kısayol Shift+F8)
-                    -> yoldan çıktıysan, tarlaya uçtuysan, bir yere
-                       sıkıştıysan kamyonu en yakın yola, gittiğin yöne
-                       doğru koyar. Oyunun F7 > 2'si gibi ama her yerde
-                       çalışır.
-           "Kendi şeridine geç"
-                    -> kazada karşı şeride düştüysen kamyonu kendi
-                       şeridine, doğru yöne bakacak şekilde geri alır.
-           "Kamyonu düzelt"
-                    -> devrildiysen kamyonu olduğun yerde tekerleklerinin
-                       üstüne, düz koyar.
-           "Son ışınlanmayı geri al"
-                    -> yanlışlıkla ışınlandıysan ya da biri seni
-                       çektiyse önceki yerine döner.
-           "Geri sar 10 sn / 30 sn / 1 dk / 3 dk"
-                    -> kazadan, uçuştan önce yolda düzgün gittiğin son
-                       noktaya döndürür.
+  Kurtar   "Yola çek"            -> yoldan çıktıysan, tarlaya uçtuysan
+                                    kamyonu en yakın yola, gittiğin yöne koyar.
+           "Kendi şeridine geç"  -> kazada karşı şeride düştüysen kendi
+                                    şeridine, doğru yöne bakacak şekilde alır.
+           "Kamyonu düzelt"      -> devrildiysen olduğun yerde düz koyar.
+           "Son ışınlanmayı geri al", "Geri sar 10 sn / 30 sn / 1 dk / 3 dk"
   Yerler   Bulunduğun yeri adıyla kaydet, sonra tek tıkla oraya dön.
-           Koordinat (X Y Z) yazıp oraya git.
-  Ayarlar  Görünen adın, seni kimin çekebileceği, tuşlar.
+  Ayarlar  Görünen adın, seni kimin çekebileceği, tuşlar, otomatik güncelleme.
 
-  "YOLA ÇEK" VE "KENDİ ŞERİDİNE GEÇ" NEDEN HEP DOĞRU YERE KOYAR?
-  Mod, sen normal sürerken (dik, ileri giderken, kaymadan, asfaltta)
-  geçtiğin yolu arka planda not eder. Kaza anını (savrulma, devrilme,
-  havada uçma) kendisi anlar; o anları, hemen öncesini ve çim/toprak
-  zemini yok sayar. Böylece kamyon hep daha önce düzgün sürdüğün
-  şeride, doğru yöne bakacak şekilde konur; çimene, tarlaya ya da
-  çarptığın aracın üstüne konmaz. Bu yüzden kamyon kaza noktasının
-  biraz gerisine konabilir, bu bilerek böyle.
-  Hiç sürmediğin bir yerde "Yola çek" kamyonu olduğu yerde düzeltir.
-
-  Bildirimler ekranın üst ortasında, menüyle aynı tasarımda küçük bir
-  kutucukta çıkar ve birkaç saniyede kendiliğinden kaybolur.
-
-  Menünün üstündeki nokta durumu gösterir:
-     gri   = tek başınasın           yeşil = konvoyda, bağlantı tamam
-     sarı  = bağlantı kontrol ediliyor  kırmızı = konvoy sohbetine ulaşılamadı
-  Uzaklıklar oyunun GPS'i gibi "oyun km"si olarak gösterilir (yaklaşık).
-
-  NEDEN ŞEHİR LİSTESİ YOK? Oyunda şehir merkezini yola oturtan bir
-  fonksiyon yok; denediğimizde kamyon binanın üstüne/havaya düştü.
-  Bunun yerine bir yere gidip "Yerler > Kaydet" de ve yerler.txt
-  dosyasını arkadaşlarınla paylaş; ya da host "Herkesi yanıma topla" desin.
-
-KURULUM (herkes yapmalı: sen ve arkadaşların)
-  1) Oyunu tamamen kapat.
-  2) KUR.bat dosyasına çift tıkla. Oyun klasörünü kendisi bulur,
-     SPF Framework yoksa onu da kurar, eklentiyi açık hale getirir.
-  3) Oyunu aç, profilini yükle, kamyondayken F8'e bas.
-
-  GÜNCELLEME: yeni sürümün KUR.bat'ını oyun kapalıyken çalıştırman
-  yeterli. Ayarların ve kayıtlı yerlerin olduğu gibi kalır.
-
-  Not: Mod, oyunun "bin\win_x64\plugins" klasörüne kurulur. Oyunun
-  Mod Yöneticisi'nde görünmez, orada açman gerekmez.
+  Menünün üstündeki nokta:
+     gri = tek başınasın     sarı = konvoya bağlanıyor
+     yeşil = konvoyda, bağlantı tamam     kırmızı = sorun var
 
 KONVOYDA NASIL ÇALIŞIR?
   - Arkadaşlarının konumu konvoy sohbeti üzerinden gizli mesajlarla
     paylaşılır. Modu kurulu olanlar bu mesajları GÖRMEZ.
-    Modu kurulu OLMAYAN biri varsa sohbette "#KTP1 ..." satırları görür.
-  - Bu yüzden ışınlanmak istediğin arkadaşında da mod kurulu olmalı.
-  - Mesajlar sadece konvoya girince, menüyü açınca ya da bir butona
-    basınca gider; sürekli gönderilmez, bilgisayarı ve interneti yormaz.
-
-YÖNETİCİ (ADMIN) KİM?
-  - Konvoyu kuran kişi (host) yöneticidir; listede taç simgesi çıkar.
-  - Herkes Ayarlar sekmesinden kendisi için seçer:
-      "Sadece host" (varsayılan) -> sadece konvoy sahibi seni çekebilir
-      "Herkes"                   -> modu olan herkes çekebilir
-      "Kimse"                    -> kimse çekemez
-  - "Git" ile herkes istediği arkadaşının yanına her zaman gidebilir.
-
-NASIL IŞINLIYOR?
-  Oyunun kendi komutu kullanılır: cheat teleport X;Y;Z;yön
-  Bunun için ışınlanma anında geliştirici modu (g_developer) bir anlığına
-  açılır, sonra otomatik kapatılır (Ayarlar'dan değiştirilebilir).
-  Konsolu (~) açmana ya da config.cfg'ye dokunmana gerek yok.
-  Oyunun ışınlanma fonksiyonu konvoyu destekler: diğer oyuncular seni
-  yeni yerinde görür; çakışan araçlar sunucu ayarına göre hayalet olur.
-  Yakın ışınlanmalar (yola çek, şeridine geç, kamyonu düzelt, kısa geri
-  sar) yükleme ekranı olmadan anında olur. Uzağa (ör. arkadaşının
-  yanına) ışınlanınca oyun o bölgeyi yüklesin diye birkaç saniyelik
-  yükleme ekranı çıkar; bu, kamyonun henüz yüklenmemiş yerin içinden
-  düşmemesi içindir.
+  - Bu yüzden arkadaşında da mod kurulu olmalı (1.3.0 veya üstü).
+  - Oyuna girince mod birkaç saniyede bir kendiliğinden arar; liste
+    kendiliğinden dolar.
+  - Yönetici (admin) konvoyu kuran kişidir (host). Herkes Ayarlar'dan
+    kimin kendisini çekebileceğini seçer: Sadece host / Herkes / Kimse.
 
 SORUN GİDERME
-  - F8 menüyü açmıyor / Shift+F8 çalışmıyor:
-      * SPF Framework yüklü mü? Değilse KUR.bat'ı tekrar çalıştır.
-      * Tuş başka bir şeyle çakışıyorsa: Ayarlar > Menü tuşu (ya da
-        Yola çek tuşu) > Değiştir.
-  - Nokta kırmızı ("Konvoy sohbetine ulaşılamadı"):
-      Ayarlar > Teşhis bilgisi'ne bak. "Sohbet kancaları: YOK" ise oyun
-      güncellenmiş olabilir; SPF ve KonvoyTP güncellemesi gerekir.
-  - Arkadaş listesi boş: "Yenile"ye bas. Arkadaşında da mod kurulu
-    olmalı ve aynı konvoyda olmalı.
-  - "Işınlanma olmadı" hatası: kamyonda (sürüş ekranında) olmalısın;
-    garaj/menü ekranında çalışmaz.
-  - "Yakında kayıtlı şerit yok": o yolda henüz hiç düzgün sürmedin
-    (ör. yeni ışınlandın). "Yola çek"i kullan.
-  - Kayıt dosyası: ...\bin\win_x64\plugins\spfPlugins\KonvoyTP\logs
-    ("konvoy bağlantısı doğrulandı" satırı konvoy bağlantısının,
-    "kaza algılandı" satırı kaza algılamanın çalıştığını gösterir.)
-
-KALDIRMA
-  Oyun kapalıyken KALDIR.bat'a çift tıkla. Kayıtlı yerlerin masaüstüne
-  yedeklenir. SPF Framework yerinde kalır (başka modlar kullanabilir).
-
-DOSYALAR
-  spfPlugins\KonvoyTP\KonvoyTP.dll   eklenti
-  spfPlugins\KonvoyTP\yerler.txt     kayıtlı yerlerin (ad|x|y|z|yön)
-                                     -> arkadaşına kopyalayabilirsin
+  - Arkadaş listede yok: Konvoy sekmesinde altta "Bağlantı: ... gönderildi
+    · ... geri geldi · ... arkadaştan geldi" yazar. "arkadaştan geldi" 0
+    kalıyorsa arkadaşının modu çalışmıyordur: KonvoyTP uygulamasını açıp
+    "Mod: Kurulu" yazdığına baksın.
+  - F8 açılmıyor: uygulamada "Yeniden kur". Tuş çakışıyorsa oyunda
+    Ayarlar > Menü tuşu > Değiştir.
+  - Kayıt dosyası: ...\bin\win_x64\plugins\spfPlugins\KonvoyTP\logs\KonvoyTP.log
+    ("konvoy bağlantısı doğrulandı" ve "gelen:" satırları konvoy
+    bağlantısının çalıştığını gösterir.)
 
 UYARI
-  ETS2 güncellenince oyun içi adresler değişebilir. Böyle bir durumda
-  menüde "kancalar YOK" görürsen önce SPF Framework'ün yeni sürümünü
-  kur (https://github.com/TrackAndTruckDevs/SPF-Framework).
+  Işınlanma oyunun kendi "cheat teleport" komutuyla yapılır; geliştirici
+  modu bir anlığına açılıp otomatik kapanır. Resmi konvoy modu içindir.
   Bu mod SPF-Framework (Apache 2.0, Track'n'Truck Devs) üzerine kuruludur.
+  https://github.com/unsalable/KonvoyTP
