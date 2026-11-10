@@ -649,6 +649,7 @@ struct Model {
 Model g_m;
 std::mutex g_mx;
 HWND g_wnd = nullptr;
+bool g_appJustUpdated = false;  // started with --guncellendi (the previous version replaced itself with this one)
 volatile LONG g_cancel = 0;
 const UINT WM_APP_REFRESH = WM_APP + 1;
 const UINT WM_APP_RESTART = WM_APP + 2;
@@ -717,7 +718,7 @@ void AutoModUpdate() {
   bool ok = InstallMod(m.gameDir, err, [](const std::wstring& s) { Mutate([&](Model& x) { x.busyText = s; }); });
   Mutate([&](Model& x) {
     x.busy = false;
-    x.msg = ok ? L"Mod " + W(APP_VERSION) + L" sürümüne güncellendi." : L"Mod güncellenemedi: " + W(err);
+    x.msg = ok ? (g_appJustUpdated ? L"KonvoyTP ve mod " : L"Mod ") + W(APP_VERSION) + L" sürümüne güncellendi." : L"Mod güncellenemedi: " + W(err);
     x.msgKind = ok ? K_OK : K_ERR;
   });
   RefreshGame();
@@ -1481,6 +1482,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
   g_m.gameDir = ResolveGameDir(L"");
   if (!g_m.gameDir.empty()) SaveGameDir(g_m.gameDir);
   if (args.updated) {
+    g_appJustUpdated = true;
     g_m.msg = L"KonvoyTP " + W(APP_VERSION) + L" sürümüne güncellendi.";
     g_m.msgKind = K_OK;
   }

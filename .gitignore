@@ -12,3 +12,6 @@ third_party/SPF-Framework-1.2.7/spfAssets/
 .vs/
 .vscode/
 *.user
+
+# test builds (e.g. build_eski for the self-update test)
+build*/
